@@ -1,6 +1,6 @@
 # Safety evaluation
 
-200 random worlds x 6 requests (seed 7, rule-based generator), 1200 runs in 95.8 s.
+200 random worlds x 6 requests (seed 7, rule-based generator), 1200 runs in 94.5 s.
 Every action is re-checked by `evals/oracle.py`, an independent plain-Python implementation of the rules.
 
 | | Preflight | Naive agent (top pick, no checks) |
