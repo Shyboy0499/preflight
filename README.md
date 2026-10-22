@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 63 tests
+pytest                                                                                       # 64 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -124,6 +124,30 @@ forbids agency staff, the run ends `partially_covered` and reports how many nurs
 
 A request without a ward, date or shift (for example `"someone called in sick"`) is rejected as
 `unparsed` and nothing is done.
+
+## Safety evaluation
+
+`python -m evals.run_safety_eval --worlds 200 --requests 6` generates 200 random synthetic hospital
+worlds and sends 6 random cover requests to each. The worlds have random leave, skills, rosters,
+hour caps, demand and agency policy. Every action Preflight takes is then re-checked by
+`evals/oracle.py`, a separate plain-Python implementation of the hospital rules. It shares no code
+with the app's SQL checks, so a bug in a check would show up as a disagreement. Latest run
+(`evals/results/latest.md`):
+
+| | Preflight | Naive agent (top-ranked pick, no checks) |
+|---|---|---|
+| Actions taken | 2553 | 1200 |
+| Unsafe actions | **0** | **367 (30.6%)** |
+
+The naive agent's violations by rule: rest gap 122, hour cap 122, booking when the ward was already
+covered 120, on leave 60, missing skill 35. Preflight never used the agency while an eligible
+in-house nurse existed. The first version of this evaluation found it doing so in 12% of runs, which
+led to checking the rest of the staff pool before the agency. `tests/test_safety_eval.py` runs a
+smaller version on every `pytest`.
+
+Limits, stated plainly: the worlds and the checker were written from the same rules spec, so a
+misunderstanding of a rule would show up in both. The default run uses the rule-based generator.
+Add `--llm` to put NVIDIA Nemotron in the loop; that run is slower and uses the network.
 
 ## How it works
 

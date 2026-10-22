@@ -46,12 +46,15 @@ def test_scenario_b_refuses_priya_with_evidence_and_escalates(make_agent):
         "violations": ["staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30"],
     }
     refusals = {a.candidate.params.get("staff_id"): a.failed[0].name for a in result.attempts if not a.passed and a.candidate.params}
-    assert refusals == {
+    assert {k: refusals[k] for k in ("S001", "S003", "S002", "S008")} == {
         "S001": "staff_not_on_leave",
         "S003": "under_weekly_hour_cap",
         "S002": "has_required_skill",
         "S008": "no_conflicting_shift",
     }
+    # backfilled staff (on the 4B day shift) were checked too, and refused for the rest gap
+    backfill = [a for a in result.attempts if a.candidate.origin == "backfill"]
+    assert backfill and all([r.name for r in a.failed] == ["no_conflicting_shift"] for a in backfill)
 
 
 def test_day_shift_needs_no_cover(make_agent):
@@ -124,8 +127,9 @@ def test_hallucinated_or_garbage_plans_are_dropped(make_agent):
 
     result = make_agent("scenario_b", generator=liar).run(NIGHT)
     assert result.parse_path == "rules"
-    tried = [a.candidate.label() for a in result.attempts]
-    assert tried == ["no_cover_needed()", "escalate_to_agency()"]
+    tried = [a.candidate for a in result.attempts]
+    assert not any(c.params.get("staff_id") == "S999" or c.action == "delete_roster" for c in tried)
+    assert {c.origin for c in tried} == {"default", "backfill"}  # nothing from the bogus plan
     assert result.fired["action"] == "escalate_to_agency"
 
 

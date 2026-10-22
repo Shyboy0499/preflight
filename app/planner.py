@@ -5,7 +5,8 @@ H-MEM memories. Its output is validated against the action library and the
 staff pool; anything else is dropped. The outer order is fixed policy:
 
   1. no_cover_needed     (cheapest outcome; its check proves the shift is covered)
-  2. offers to staff     (memory-recalled first and always included, then the generator's ranking)
+  2. offers to staff     (memory-recalled first and always included, then the generator's ranking,
+                          then backfill from the rest of the pool, up to MAX_CANDIDATES)
   3. escalate_to_agency  (costs money, so last)
 """
 
@@ -27,7 +28,8 @@ precondition checks before anything happens, so rank by fit; do not invent staff
 Reply with only JSON:
 {"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "<id>"}, "reason": "<short>"}]}"""
 
-MAX_OFFERS = 4
+MAX_OFFERS = 4  # how many staff the generator is asked to rank
+MAX_CANDIDATES = 12  # offers tried in total before the agency (generator's picks, then backfill)
 
 
 def remembered_staff(memories: list[Memory], request: ShiftRequest) -> list[str]:
@@ -101,7 +103,18 @@ def plan(
             offers.append(Candidate("offer_shift_to_staff", {"staff_id": staff_id},
                                     "recalled from H-MEM (not ranked by the generator)", "memory"))
     offers.sort(key=lambda c: c.origin != "memory")
-    offers = offers[:MAX_OFFERS]
+    offers = offers[:MAX_OFFERS + len(remembered)]
+
+    # Backfill from the rest of the pool before paying for agency: the safety
+    # eval found the agency being used while an eligible nurse sat outside the
+    # generator's short list. Ranked by fit; the gate still checks every one.
+    tried = {o.params["staff_id"] for o in offers}
+    rest = sorted(
+        (p for p in staff_pool if not p.get("already_on_this_shift") and p["staff_id"] not in tried),
+        key=lambda p: (bool(p.get("shifts_on_date")), not p.get("has_required_skill"), float(p.get("week_hours") or 0), p["staff_id"]),
+    )
+    for p in rest[: max(0, MAX_CANDIDATES - len(offers))]:
+        offers.append(Candidate("offer_shift_to_staff", {"staff_id": p["staff_id"]}, "backfill: next best fit in the staff pool", "backfill"))
     candidates = [
         Candidate("no_cover_needed", {}, "check whether the shift is already covered", "default"),
         *offers,

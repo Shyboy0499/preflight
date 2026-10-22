@@ -1,0 +1,27 @@
+{
+  "config": {
+    "worlds": 200,
+    "requests_per_world": 6,
+    "seed": 7,
+    "generator": "rule-based"
+  },
+  "seconds": 95.8,
+  "stats": {
+    "runs": 1200,
+    "decision:fired": 1075,
+    "actions": 2553,
+    "naive_actions": 1200,
+    "naive_unsafe_actions": 367,
+    "decision:partially_covered": 101,
+    "decision:no_safe_action": 24
+  },
+  "preflight_violations": {},
+  "naive_violations": {
+    "ward_not_short": 120,
+    "rest_conflict": 122,
+    "on_leave": 60,
+    "over_hour_cap": 122,
+    "missing_skill": 35
+  },
+  "failures": []
+}
