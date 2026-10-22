@@ -49,7 +49,9 @@ class Query:
 
     `sql` uses `{p}` for the table prefix and `:name` for parameters. Every
     selected column must be aliased in the same order as `columns`, because the
-    Zetaris REST API returns rows as positional lists.
+    Zetaris REST API returns rows as positional lists (checked against the
+    response's `headers`). Empty `columns` (metadata commands such as SHOW)
+    takes the names from `headers`.
     """
 
     name: str
@@ -265,21 +267,38 @@ class ZetarisRestSource:
 
     @staticmethod
     def _rows(payload: Any, query: Query) -> list[dict[str, Any]]:
-        # TODO(zetaris-live): confirm the response shape against the instance's
-        # OpenAPI spec (/redoc/docs.yaml). The getting-started client reads
-        # rows from payload["data"] as positional lists; we also accept dicts.
+        """Map a run response to dicts.
+
+        Confirmed against a local instance (2026-10-22): the body is
+        {"data": [[...], ...], "headers": [col, ...], "total": n, "timeUsed": ms}
+        with values as strings. When `headers` is present it must match the
+        declared columns (case-insensitive), otherwise evidence could be
+        misattributed, so the query fails instead.
+        """
         data = payload.get("data") if isinstance(payload, dict) else None
         if data is None:
             raise DataSourceUnavailable(f"zetaris: {query.name} response has no 'data'")
+        headers = payload.get("headers")
+        if query.columns:
+            names = list(query.columns)
+            if isinstance(headers, list) and [str(h).lower() for h in headers] != [c.lower() for c in names]:
+                raise DataSourceUnavailable(f"zetaris: {query.name} returned columns {headers}, expected {names}")
+        elif isinstance(headers, list):
+            names = [str(h) for h in headers]
+        else:
+            names = []
         rows: list[dict[str, Any]] = []
         for raw in data:
             if isinstance(raw, dict):
-                row = {c: raw.get(c) for c in query.columns}
-            elif isinstance(raw, (list, tuple)) and len(raw) == len(query.columns):
-                row = dict(zip(query.columns, raw))
+                values = [raw.get(c) for c in names] if query.columns else list(raw.values())
+            elif isinstance(raw, (list, tuple)):
+                values = list(raw)
             else:
-                raise DataSourceUnavailable(f"zetaris: {query.name} row shape does not match {query.columns}")
-            rows.append({k: _coerce_rest_value(v) for k, v in row.items()})
+                raise DataSourceUnavailable(f"zetaris: {query.name} unexpected row type {type(raw).__name__}")
+            keys = names or [f"col_{i}" for i in range(len(values))]
+            if len(values) != len(keys):
+                raise DataSourceUnavailable(f"zetaris: {query.name} row shape does not match {keys}")
+            rows.append({k: _coerce_rest_value(v) for k, v in zip(keys, values)})
         return rows
 
 

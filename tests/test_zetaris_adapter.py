@@ -44,7 +44,7 @@ def test_rest_request_follows_zetaris_contract_and_coerces_strings():
         seen["url"] = str(request.url)
         seen["headers"] = request.headers
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"data": [["S001", "38"]]})
+        return httpx.Response(200, json={"data": [["S001", "38"]], "headers": ["staff_id", "cap"], "total": 1, "timeUsed": 5})
 
     result = make(handler).run(Q, {"sid": "S001"})
     assert seen["url"] == "http://localhost:8888/api/v1.0/sql-editor/sqls/run"
@@ -82,3 +82,22 @@ def test_rest_timeout_becomes_unavailable():
 def test_missing_credentials_is_reported_by_name():
     with pytest.raises(DataSourceUnavailable, match="ZETARIS_API_KEY"):
         ZetarisRestSource(load_config(sample_mode=False, zetaris_api_key="", zetaris_org_id="1"))
+
+
+def test_metadata_query_takes_column_names_from_headers():
+    show = Query("show_tables", "SHOW LIGHTNING TABLES NY_TAXI", ())
+    body = {"data": [["taxi_zones", None, "csv"]], "headers": ["name", "materialized_table", "format"]}
+    result = make(lambda r: httpx.Response(200, json=body)).run(show)
+    assert result.rows == [{"name": "taxi_zones", "materialized_table": None, "format": "csv"}]
+
+
+def test_metadata_query_without_headers_gets_positional_names():
+    show = Query("show_tables", "SHOW LIGHTNING TABLES NY_TAXI", ())
+    result = make(lambda r: httpx.Response(200, json={"data": [["taxi_zones", "csv"]]})).run(show)
+    assert result.rows == [{"col_0": "taxi_zones", "col_1": "csv"}]
+
+
+def test_headers_that_disagree_with_declared_columns_fail_the_query():
+    body = {"data": [["38", "S001"]], "headers": ["cap", "staff_id"]}
+    with pytest.raises(DataSourceUnavailable, match="returned columns"):
+        make(lambda r: httpx.Response(200, json=body)).run(Q, {"sid": "S001"})
