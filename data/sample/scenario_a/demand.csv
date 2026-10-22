@@ -1,0 +1,5 @@
+ward,shift_date,shift_type,patients,acuity,required_nurses,required_skill
+4B,2026-10-27,day,24,high,5,cardiac_telemetry
+4B,2026-10-27,evening,24,high,4,cardiac_telemetry
+4B,2026-10-27,night,24,high,4,cardiac_telemetry
+3A,2026-10-27,day,20,medium,4,RN

@@ -1,0 +1,4 @@
+staff_id,leave_type,start_date,end_date,status
+S004,sick,2026-10-27,2026-10-27,approved
+S010,annual,2026-11-20,2026-11-27,pending
+S001,annual,2026-10-26,2026-10-30,approved

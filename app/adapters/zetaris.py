@@ -1,0 +1,292 @@
+"""Zetaris adapter: every fact Preflight reasons about comes through here.
+
+Two interchangeable sources run the *same rendered SQL text*:
+
+* ZetarisRestSource  - live mode. Direct REST API of a Zetaris instance
+  (POST {ZETARIS_REST_URL}/sql-editor/sqls/run, bearer API key, X-Org-ID,
+  UUID X-Request-ID), as documented in github.com/zetaris/getting-started
+  (docs/connections/client-setup.md). Written for this project; no code copied.
+* DuckDBSampleSource - SAMPLE_MODE. DuckDB views over data/sample/<scenario>/*.csv
+  exposed under the same `<prefix>.<table>` names.
+
+Rules from the Zetaris AGENTS.md that this adapter enforces for every call:
+read-only statements only (SELECT / WITH / SHOW / DESCRIBE), one statement per
+call, no trailing semicolon, qualified table names. The API key is never logged.
+
+Failure policy: any transport error, timeout or bad response raises
+DataSourceUnavailable. Callers that gate actions treat that as a failed check
+(fail closed). There is deliberately no silent fallback from live Zetaris to the
+sample CSVs: acting on stale demo data would be worse than not acting.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Protocol
+
+import httpx
+
+from app.config import Config
+
+
+class DataSourceUnavailable(RuntimeError):
+    """The data source could not answer. Gated actions must not fire."""
+
+
+class UnsafeQuery(ValueError):
+    """The SQL is not a single read-only statement, or a parameter is unsafe."""
+
+
+@dataclass(frozen=True)
+class Query:
+    """A named, parameterised SQL statement.
+
+    `sql` uses `{p}` for the table prefix and `:name` for parameters. Every
+    selected column must be aliased in the same order as `columns`, because the
+    Zetaris REST API returns rows as positional lists.
+    """
+
+    name: str
+    sql: str
+    columns: tuple[str, ...]
+
+
+@dataclass
+class QueryResult:
+    query: str
+    source: str
+    sql: str
+    rows: list[dict[str, Any]]
+    query_id: str
+    elapsed_ms: int
+    fetched_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "query": self.query,
+            "query_id": self.query_id,
+            "sql": self.sql,
+            "row_count": len(self.rows),
+            "fetched_at": self.fetched_at,
+        }
+
+
+class SqlSource(Protocol):
+    name: str
+    table_prefix: str
+
+    def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult: ...
+
+
+# --- rendering and guards ----------------------------------------------------
+
+_READ_ONLY_START = re.compile(r"^\s*(SELECT|WITH|SHOW|DESCRIBE)\b", re.I)
+_WRITE_WORDS = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|REPLACE|COPY|ATTACH|CALL|EXEC)\b",
+    re.I,
+)
+_PARAM = re.compile(r"(?<![:\w]):([a-z_][a-z0-9_]*)\b")
+_SAFE_TEXT = re.compile(r"^[A-Za-z0-9 _\-.:/]{0,120}$")
+_SAFE_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+def sql_literal(value: Any) -> str:
+    """Render one parameter as a typed SQL literal. Rejects anything unusual."""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, datetime):
+        return f"TIMESTAMP '{value.strftime('%Y-%m-%d %H:%M:%S')}'"
+    if isinstance(value, date):
+        return f"DATE '{value.isoformat()}'"
+    if isinstance(value, str):
+        if not _SAFE_TEXT.match(value):
+            raise UnsafeQuery(f"parameter value not allowed: {value!r}")
+        return "'" + value.replace("'", "''") + "'"
+    raise UnsafeQuery(f"unsupported parameter type: {type(value).__name__}")
+
+
+def assert_read_only(sql: str) -> None:
+    if ";" in sql:
+        raise UnsafeQuery("one statement per call, no semicolons")
+    if not _READ_ONLY_START.match(sql):
+        raise UnsafeQuery("only SELECT / WITH / SHOW / DESCRIBE are allowed")
+    if _WRITE_WORDS.search(sql):
+        raise UnsafeQuery("statement contains a write keyword")
+
+
+def render(query: Query, params: dict[str, Any] | None, table_prefix: str) -> str:
+    if not _SAFE_PREFIX.match(table_prefix):
+        raise UnsafeQuery(f"bad table prefix: {table_prefix!r}")
+    params = params or {}
+    sql = query.sql.replace("{p}", table_prefix)
+
+    def sub(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in params:
+            raise UnsafeQuery(f"missing parameter :{key} for {query.name}")
+        return sql_literal(params[key])
+
+    sql = " ".join(_PARAM.sub(sub, sql).split())
+    assert_read_only(sql)
+    return sql
+
+
+def _normalise(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+_NUMBER = re.compile(r"^-?\d+(\.\d+)?([eE][-+]?\d+)?$")
+
+
+def _coerce_rest_value(value: Any) -> Any:
+    """Zetaris REST returns values as strings; decimals may use exponent form."""
+    if isinstance(value, str) and _NUMBER.match(value):
+        number = float(value)
+        return int(number) if number.is_integer() and "." not in value and "e" not in value.lower() else number
+    return value
+
+
+# --- sources -----------------------------------------------------------------
+
+
+class DuckDBSampleSource:
+    """In-process stand-in for Zetaris over the synthetic CSVs."""
+
+    name = "duckdb-sample"
+
+    def __init__(self, csv_dir: Path, table_prefix: str = "preflight"):
+        import duckdb
+
+        if not _SAFE_PREFIX.match(table_prefix) or "." in table_prefix:
+            raise UnsafeQuery("sample prefix must be a single identifier")
+        self.table_prefix = table_prefix
+        self.csv_dir = csv_dir
+        self._con = duckdb.connect(":memory:")
+        self._con.execute(f"CREATE SCHEMA {table_prefix}")
+        csvs = sorted(csv_dir.glob("*.csv"))
+        if not csvs:
+            raise DataSourceUnavailable(f"no CSV files in {csv_dir}")
+        for path in csvs:
+            self._con.execute(
+                f"CREATE VIEW {table_prefix}.{path.stem} AS "
+                f"SELECT * FROM read_csv('{path.as_posix()}', header = true, auto_detect = true)"
+            )
+
+    def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
+        sql = render(query, params, self.table_prefix)
+        started = time.perf_counter()
+        try:
+            cursor = self._con.execute(sql)
+            raw = cursor.fetchall()
+        except Exception as exc:  # duckdb raises several error types
+            raise DataSourceUnavailable(f"{self.name}: {query.name} failed: {exc}") from exc
+        rows = [dict(zip(query.columns, (_normalise(v) for v in row))) for row in raw]
+        return QueryResult(
+            query=query.name,
+            source=f"{self.name}:{self.csv_dir.name}",
+            sql=sql,
+            rows=rows,
+            query_id=str(uuid.uuid4()),
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+
+class ZetarisRestSource:
+    """Live Zetaris over its direct REST API."""
+
+    name = "zetaris"
+    RUN_PATH = "/sql-editor/sqls/run"
+
+    def __init__(self, cfg: Config, client: httpx.Client | None = None):
+        missing = [n for n, v in (("ZETARIS_API_KEY", cfg.zetaris_api_key), ("ZETARIS_ORG_ID", cfg.zetaris_org_id)) if not v]
+        if missing:
+            raise DataSourceUnavailable("Zetaris not configured, set in .env.local: " + ", ".join(missing))
+        if not cfg.zetaris_org_id.isdigit():
+            raise DataSourceUnavailable("ZETARIS_ORG_ID must be the numeric organisation ID")
+        self.table_prefix = cfg.zetaris_table_prefix
+        self.base_url = cfg.zetaris_rest_url
+        self.limit = cfg.zetaris_query_limit
+        self._org = cfg.zetaris_org_id
+        self._key = cfg.zetaris_api_key
+        self._client = client or httpx.Client(timeout=cfg.zetaris_timeout_s)
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._key}",
+            "X-Org-ID": self._org,
+            "X-Request-ID": str(uuid.uuid4()),
+            "Content-Type": "application/json",
+        }
+
+    def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
+        sql = render(query, params, self.table_prefix)
+        query_id = str(uuid.uuid4())
+        body = {"queryId": query_id, "sql": sql, "source": "SqlEditor", "limit": self.limit}
+        started = time.perf_counter()
+        try:
+            response = self._client.post(self.base_url + self.RUN_PATH, json=body, headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise DataSourceUnavailable(f"zetaris: {query.name} timed out") from exc
+        except httpx.HTTPError as exc:
+            raise DataSourceUnavailable(f"zetaris: cannot reach {self.base_url}: {type(exc).__name__}") from exc
+        if response.status_code != 200:
+            hint = {401: "bad or expired API key", 400: "check ZETARIS_ORG_ID / request IDs / SQL"}.get(response.status_code, "")
+            raise DataSourceUnavailable(
+                f"zetaris: {query.name} HTTP {response.status_code} {hint}: {response.text[:300]}"
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DataSourceUnavailable("zetaris: response was not JSON") from exc
+        rows = self._rows(payload, query)
+        return QueryResult(
+            query=query.name,
+            source=self.name,
+            sql=sql,
+            rows=rows,
+            query_id=query_id,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+    @staticmethod
+    def _rows(payload: Any, query: Query) -> list[dict[str, Any]]:
+        # TODO(zetaris-live): confirm the response shape against the instance's
+        # OpenAPI spec (/redoc/docs.yaml). The getting-started client reads
+        # rows from payload["data"] as positional lists; we also accept dicts.
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if data is None:
+            raise DataSourceUnavailable(f"zetaris: {query.name} response has no 'data'")
+        rows: list[dict[str, Any]] = []
+        for raw in data:
+            if isinstance(raw, dict):
+                row = {c: raw.get(c) for c in query.columns}
+            elif isinstance(raw, (list, tuple)) and len(raw) == len(query.columns):
+                row = dict(zip(query.columns, raw))
+            else:
+                raise DataSourceUnavailable(f"zetaris: {query.name} row shape does not match {query.columns}")
+            rows.append({k: _coerce_rest_value(v) for k, v in row.items()})
+        return rows
+
+
+HEALTH = Query("health_select_1", "SELECT 1 AS ok", ("ok",))
+
+
+def make_source(cfg: Config) -> SqlSource:
+    if cfg.sample_mode:
+        return DuckDBSampleSource(cfg.data_dir / cfg.sample_scenario)
+    return ZetarisRestSource(cfg)

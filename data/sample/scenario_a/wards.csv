@@ -1,0 +1,4 @@
+ward,ward_name,agency_allowed
+4B,Cardiology,true
+3A,General Medicine,true
+ICU,Intensive Care,false
