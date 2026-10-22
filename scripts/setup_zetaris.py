@@ -117,6 +117,9 @@ def exists(state: dict[str, set[str]], kind: str, name: str) -> bool:
 
 def step_postgres(apply: bool) -> None:
     print("1. Postgres leave system")
+    if apply and not pg_password(required=False):
+        say("skip", "PREFLIGHT_PG_PASSWORD not set in .env.local; leave system not created")
+        return
     st = pg_container_state()
     if st == "running":
         say("ok", f"container {PG_CONTAINER} running (127.0.0.1:{PG_HOST_PORT}, network {ZETARIS_NETWORK})")
@@ -141,7 +144,7 @@ def step_postgres(apply: bool) -> None:
 
 def step_leave_table(apply: bool) -> None:
     print("2. leave table (scenario A rows)")
-    if pg_container_state() != "running":
+    if pg_container_state() != "running" or not pg_password(required=False):
         say("plan", f"create table and insert {len(BASE_LEAVE)} rows once Postgres is up")
         return
     with pg_connect() as conn:
@@ -191,7 +194,7 @@ def step_skills_service() -> bool:
 def step_zetaris(src, apply: bool, skills_up: bool) -> None:
     print("4b. Zetaris objects")
     state = zetaris_state(src)
-    for (kind, name, sql), (_, _, shown) in zip(zetaris_statements(pg_password(required=apply)), zetaris_statements(MASK)):
+    for (kind, name, sql), (_, _, shown) in zip(zetaris_statements(pg_password(required=False)), zetaris_statements(MASK)):
         if exists(state, kind, name):
             say("ok", f"{kind} {name} exists")
             continue
@@ -200,6 +203,9 @@ def step_zetaris(src, apply: bool, skills_up: bool) -> None:
             continue
         if name == "staff_skills" and not skills_up:
             say("skip", "skills service not running")
+            continue
+        if kind.startswith("datasource") and (not pg_password(required=False) or pg_container_state() != "running"):
+            say("skip", "Postgres leave system not set up yet")
             continue
         try:
             src.execute_admin(sql)
