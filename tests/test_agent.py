@@ -131,7 +131,7 @@ def test_hallucinated_or_garbage_plans_are_dropped(make_agent):
 
 class _Down:
     name = "zetaris"
-    table_prefix = "preflight"
+    tables = {}
 
     def run(self, query, params=None):
         raise DataSourceUnavailable("zetaris: timed out")

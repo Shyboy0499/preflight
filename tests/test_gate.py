@@ -82,7 +82,7 @@ def test_unknown_ward_fails_every_action(src_a):
 
 class _DownSource:
     name = "down"
-    table_prefix = "preflight"
+    tables = {}
 
     def run(self, query, params=None):
         raise DataSourceUnavailable("zetaris: timed out")
@@ -104,3 +104,30 @@ def test_injection_through_params_is_refused(src_a):
     assert not result.passed
     staff_checks = {"staff_not_on_leave", "has_required_skill", "under_weekly_hour_cap", "no_conflicting_shift"}
     assert {r.name for r in result.results if r.status == "error"} == staff_checks
+
+
+LIVE_TABLES = {
+    "staff": "PREFLIGHT_FILES.staff",
+    "roster": "PREFLIGHT_FILES.roster",
+    "demand": "PREFLIGHT_FILES.demand",
+    "wards": "PREFLIGHT_FILES.wards",
+    "leave": "preflight_pg.leave",
+    "staff_skills": "PREFLIGHT_API.staff_skills",
+}
+
+
+@pytest.mark.parametrize(
+    "check_name, sources",
+    [
+        ("ward_actually_understaffed", {"PREFLIGHT_FILES", "preflight_pg"}),
+        ("has_required_skill", {"PREFLIGHT_FILES", "PREFLIGHT_API"}),
+    ],
+)
+def test_key_checks_join_across_zetaris_sources_in_one_query(check_name, sources):
+    from app.adapters.zetaris import render
+    from app.preconditions.checks import ALL_CHECKS
+    from app.preconditions.gate import build_params
+
+    sql = render(ALL_CHECKS[check_name].query, build_params(NIGHT, offer("S001")), LIVE_TABLES)
+    used = {name.split(".")[0] for name in LIVE_TABLES.values() if name in sql}
+    assert used == sources

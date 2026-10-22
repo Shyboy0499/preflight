@@ -40,12 +40,12 @@ STAFFING = Query(
     SELECT d.ward AS ward, d.shift_date AS shift_date, d.shift_type AS shift_type,
            d.required_nurses AS required_nurses, d.required_skill AS required_skill,
            COUNT(r.staff_id) AS available_rostered
-    FROM {p}.demand d
+    FROM {demand} d
     LEFT JOIN (
         SELECT ro.staff_id AS staff_id, ro.ward AS ward, ro.shift_date AS shift_date, ro.shift_type AS shift_type
-        FROM {p}.roster ro
+        FROM {roster} ro
         LEFT JOIN (
-            SELECT lv.staff_id AS staff_id FROM {p}.leave lv
+            SELECT lv.staff_id AS staff_id FROM {leave} lv
             WHERE lv.status = 'approved' AND lv.start_date <= :shift_date AND lv.end_date >= :shift_date
         ) away ON away.staff_id = ro.staff_id
         WHERE ro.ward = :ward AND ro.shift_date = :shift_date AND ro.shift_type = :shift_type
@@ -91,7 +91,7 @@ STAFF_NOT_ON_LEAVE = Check(
         """
         SELECT lv.staff_id AS staff_id, lv.leave_type AS leave_type, lv.start_date AS start_date,
                lv.end_date AS end_date, lv.status AS status
-        FROM {p}.leave lv
+        FROM {leave} lv
         WHERE lv.staff_id = :staff_id AND lv.status = 'approved'
           AND lv.start_date <= :shift_date AND lv.end_date >= :shift_date
         """,
@@ -112,8 +112,8 @@ HAS_REQUIRED_SKILL = Check(
         "required_skill_match",
         """
         SELECT d.required_skill AS required_skill, sk.skill AS held_skill
-        FROM {p}.demand d
-        LEFT JOIN {p}.staff_skills sk ON sk.skill = d.required_skill AND sk.staff_id = :staff_id
+        FROM {demand} d
+        LEFT JOIN {staff_skills} sk ON sk.skill = d.required_skill AND sk.staff_id = :staff_id
         WHERE d.ward = :ward AND d.shift_date = :shift_date AND d.shift_type = :shift_type
         """,
         ("required_skill", "held_skill"),
@@ -136,8 +136,8 @@ UNDER_WEEKLY_HOUR_CAP = Check(
         """
         SELECT s.staff_id AS staff_id, s.weekly_hour_cap AS weekly_hour_cap,
                COALESCE(SUM(r.hours), 0) AS rostered_hours
-        FROM {p}.staff s
-        LEFT JOIN {p}.roster r ON r.staff_id = s.staff_id
+        FROM {staff} s
+        LEFT JOIN {roster} r ON r.staff_id = s.staff_id
              AND r.shift_date >= :week_start AND r.shift_date <= :week_end
         WHERE s.staff_id = :staff_id
         GROUP BY s.staff_id, s.weekly_hour_cap
@@ -161,7 +161,7 @@ NO_CONFLICTING_SHIFT = Check(
         """
         SELECT r.shift_id AS shift_id, r.ward AS ward, r.shift_date AS shift_date,
                r.shift_type AS shift_type, r.start_ts AS start_ts, r.end_ts AS end_ts
-        FROM {p}.roster r
+        FROM {roster} r
         WHERE r.staff_id = :staff_id AND r.start_ts < :rest_until AND r.end_ts > :rest_from
         """,
         ("shift_id", "ward", "shift_date", "shift_type", "start_ts", "end_ts"),
@@ -181,7 +181,7 @@ AGENCY_ALLOWED = Check(
     "Ward policy permits booking agency staff",
     Query(
         "ward_agency_policy",
-        "SELECT w.ward AS ward, w.agency_allowed AS agency_allowed FROM {p}.wards w WHERE w.ward = :ward",
+        "SELECT w.ward AS ward, w.agency_allowed AS agency_allowed FROM {wards} w WHERE w.ward = :ward",
         ("ward", "agency_allowed"),
     ),
     passes=lambda rows, p: bool(rows) and _truthy(rows[0]["agency_allowed"]),

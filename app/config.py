@@ -42,6 +42,7 @@ class Config:
     zetaris_api_key: str
     zetaris_query_limit: int
     zetaris_table_prefix: str
+    zetaris_tables: dict[str, str]
     zetaris_timeout_s: float
 
     llm_api_key: str
@@ -52,6 +53,24 @@ class Config:
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key and self.llm_model)
+
+
+TABLES = ("staff", "staff_skills", "roster", "leave", "demand", "wards")
+
+
+def table_map(prefix: str, overrides: str) -> dict[str, str]:
+    """Qualified name per table: `<prefix>.<table>` unless ZETARIS_TABLES overrides it.
+
+    ZETARIS_TABLES="leave=preflight_pg.leave,staff_skills=PREFLIGHT_API.staff_skills"
+    lets one query join tables that live in different Zetaris sources.
+    """
+    tables = {t: f"{prefix}.{t}" for t in TABLES}
+    for item in filter(None, (x.strip() for x in overrides.split(","))):
+        name, _, qualified = item.partition("=")
+        if name.strip() not in tables or not qualified.strip():
+            raise ConfigError(f"ZETARIS_TABLES: bad entry {item!r} (tables: {', '.join(TABLES)})")
+        tables[name.strip()] = qualified.strip()
+    return tables
 
 
 def load_config(**overrides) -> Config:
@@ -83,6 +102,7 @@ def load_config(**overrides) -> Config:
         zetaris_api_key=env("ZETARIS_API_KEY") or "",
         zetaris_query_limit=int(env("ZETARIS_QUERY_LIMIT") or 1000),
         zetaris_table_prefix=env("ZETARIS_TABLE_PREFIX") or "preflight",
+        zetaris_tables=table_map(env("ZETARIS_TABLE_PREFIX") or "preflight", env("ZETARIS_TABLES") or ""),
         zetaris_timeout_s=float(env("ZETARIS_TIMEOUT_S") or 15),
         llm_api_key=env("NVIDIA_API_KEY") or "",
         llm_model=env("NVIDIA_MODEL") or "",
@@ -90,4 +110,6 @@ def load_config(**overrides) -> Config:
         llm_timeout_s=float(env("LLM_TIMEOUT_S") or 30),
     )
     cfg.update(overrides)
+    if "zetaris_table_prefix" in overrides and "zetaris_tables" not in overrides:
+        cfg["zetaris_tables"] = table_map(cfg["zetaris_table_prefix"], env("ZETARIS_TABLES") or "")
     return Config(**cfg)

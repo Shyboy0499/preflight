@@ -14,27 +14,50 @@ from app.adapters.zetaris import (
 )
 from app.config import load_config
 
-Q = Query("staff_by_id", "SELECT s.staff_id AS staff_id, s.weekly_hour_cap AS cap FROM {p}.staff s WHERE s.staff_id = :sid", ("staff_id", "cap"))
+Q = Query("staff_by_id", "SELECT s.staff_id AS staff_id, s.weekly_hour_cap AS cap FROM {staff} s WHERE s.staff_id = :sid", ("staff_id", "cap"))
 SECRET = "test-key-do-not-log"
 
 
 def make(handler):
-    cfg = load_config(sample_mode=False, today=date(2026, 10, 26), zetaris_api_key=SECRET, zetaris_org_id="1", zetaris_table_prefix="hospital")
+    cfg = load_config(sample_mode=False, today=date(2026, 10, 26), zetaris_api_key=SECRET, zetaris_org_id="1", zetaris_tables={"staff": "hospital.staff"})
     return ZetarisRestSource(cfg, client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_render_types_and_prefix():
-    sql = render(Query("q", "SELECT 1 AS x FROM {p}.t WHERE d = :d AND n = :n", ("x",)), {"d": date(2026, 10, 27), "n": 4}, "src")
+    sql = render(Query("q", "SELECT 1 AS x FROM {t} WHERE d = :d AND n = :n", ("x",)), {"d": date(2026, 10, 27), "n": 4}, {"t": "src.t"})
     assert sql == "SELECT 1 AS x FROM src.t WHERE d = DATE '2026-10-27' AND n = 4"
+
+
+def test_render_resolves_each_table_to_its_own_source():
+    q = Query("x", "SELECT d.ward AS ward FROM {demand} d JOIN {leave} l ON l.ward = d.ward", ("ward",))
+    sql = render(q, {}, {"demand": "PREFLIGHT_FILES.demand", "leave": "preflight_pg.public.leave"})
+    assert sql == "SELECT d.ward AS ward FROM PREFLIGHT_FILES.demand d JOIN preflight_pg.public.leave l ON l.ward = d.ward"
+
+
+@pytest.mark.parametrize("tables", [{}, {"staff": "x; DROP"}, {"staff": "a..b"}])
+def test_render_rejects_unknown_or_unsafe_table_names(tables):
+    with pytest.raises(UnsafeQuery):
+        render(Q, {"sid": "S001"}, tables)
+
+
+def test_table_map_overrides_individual_tables():
+    from app.config import ConfigError, table_map
+
+    m = table_map("PREFLIGHT_FILES", "leave=preflight_pg.public.leave, staff_skills=PREFLIGHT_API.staff_skills")
+    assert m["roster"] == "PREFLIGHT_FILES.roster"
+    assert m["leave"] == "preflight_pg.public.leave"
+    assert m["staff_skills"] == "PREFLIGHT_API.staff_skills"
+    with pytest.raises(ConfigError):
+        table_map("p", "holidays=x.y")
 
 
 @pytest.mark.parametrize(
     "sql",
-    ["SELECT 1; DROP TABLE x", "DELETE FROM {p}.staff", "SELECT 1 AS x FROM {p}.t WHERE a IN (SELECT 1) UNION SELECT 1 FROM (CREATE TABLE y)"],
+    ["SELECT 1; DROP TABLE x", "DELETE FROM {staff}", "SELECT 1 AS x FROM {staff} WHERE a IN (SELECT 1) UNION SELECT 1 FROM (CREATE TABLE y)"],
 )
 def test_render_rejects_non_read_only(sql):
     with pytest.raises(UnsafeQuery):
-        render(Query("bad", sql, ("x",)), {}, "p")
+        render(Query("bad", sql, ("x",)), {}, {"staff": "p.staff"})
 
 
 def test_rest_request_follows_zetaris_contract_and_coerces_strings():

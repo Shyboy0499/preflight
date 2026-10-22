@@ -151,7 +151,7 @@ SCOPE_QUERIES: tuple[Query, ...] = (
         SELECT d.ward AS ward, w.ward_name AS ward_name, w.agency_allowed AS agency_allowed,
                d.shift_date AS shift_date, d.shift_type AS shift_type, d.patients AS patients,
                d.acuity AS acuity, d.required_nurses AS required_nurses, d.required_skill AS required_skill
-        FROM {p}.demand d LEFT JOIN {p}.wards w ON w.ward = d.ward
+        FROM {demand} d LEFT JOIN {wards} w ON w.ward = d.ward
         WHERE d.ward = :ward AND d.shift_date = :shift_date AND d.shift_type = :shift_type
         """,
         ("ward", "ward_name", "agency_allowed", "shift_date", "shift_type", "patients", "acuity", "required_nurses", "required_skill"),
@@ -161,15 +161,15 @@ SCOPE_QUERIES: tuple[Query, ...] = (
         """
         SELECT s.staff_id AS staff_id, s.name AS name, s.role AS role, s.home_ward AS home_ward,
                s.weekly_hour_cap AS weekly_hour_cap, COALESCE(SUM(r.hours), 0) AS week_hours
-        FROM {p}.staff s
-        LEFT JOIN {p}.roster r ON r.staff_id = s.staff_id AND r.shift_date >= :week_start AND r.shift_date <= :week_end
+        FROM {staff} s
+        LEFT JOIN {roster} r ON r.staff_id = s.staff_id AND r.shift_date >= :week_start AND r.shift_date <= :week_end
         GROUP BY s.staff_id, s.name, s.role, s.home_ward, s.weekly_hour_cap
         """,
         ("staff_id", "name", "role", "home_ward", "weekly_hour_cap", "week_hours"),
     ),
     Query(
         "wm_staff_skills",
-        "SELECT k.staff_id AS staff_id, k.skill AS skill FROM {p}.staff_skills k",
+        "SELECT k.staff_id AS staff_id, k.skill AS skill FROM {staff_skills} k",
         ("staff_id", "skill"),
     ),
     Query(
@@ -177,7 +177,7 @@ SCOPE_QUERIES: tuple[Query, ...] = (
         """
         SELECT r.shift_id AS shift_id, r.staff_id AS staff_id, r.ward AS ward, r.shift_date AS shift_date,
                r.shift_type AS shift_type, r.start_ts AS start_ts, r.end_ts AS end_ts
-        FROM {p}.roster r WHERE r.shift_date = :shift_date
+        FROM {roster} r WHERE r.shift_date = :shift_date
         """,
         ("shift_id", "staff_id", "ward", "shift_date", "shift_type", "start_ts", "end_ts"),
     ),
@@ -186,7 +186,7 @@ SCOPE_QUERIES: tuple[Query, ...] = (
         """
         SELECT l.staff_id AS staff_id, l.leave_type AS leave_type, l.start_date AS start_date,
                l.end_date AS end_date, l.status AS status
-        FROM {p}.leave l WHERE l.start_date <= :shift_date AND l.end_date >= :shift_date
+        FROM {leave} l WHERE l.start_date <= :shift_date AND l.end_date >= :shift_date
         """,
         ("staff_id", "leave_type", "start_date", "end_date", "status"),
     ),

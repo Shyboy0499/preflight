@@ -47,7 +47,8 @@ class UnsafeQuery(ValueError):
 class Query:
     """A named, parameterised SQL statement.
 
-    `sql` uses `{p}` for the table prefix and `:name` for parameters. Every
+    `sql` uses `{table}` placeholders (e.g. `{leave}`) resolved per table to a
+    qualified name, and `:name` for parameters. Every
     selected column must be aliased in the same order as `columns`, because the
     Zetaris REST API returns rows as positional lists (checked against the
     response's `headers`). Empty `columns` (metadata commands such as SHOW)
@@ -82,7 +83,7 @@ class QueryResult:
 
 class SqlSource(Protocol):
     name: str
-    table_prefix: str
+    tables: dict[str, str]
 
     def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult: ...
 
@@ -125,19 +126,28 @@ def assert_read_only(sql: str) -> None:
         raise UnsafeQuery("statement contains a write keyword")
 
 
-def render(query: Query, params: dict[str, Any] | None, table_prefix: str) -> str:
-    if not _SAFE_PREFIX.match(table_prefix):
-        raise UnsafeQuery(f"bad table prefix: {table_prefix!r}")
-    params = params or {}
-    sql = query.sql.replace("{p}", table_prefix)
+_TABLE = re.compile(r"\{([a-z_]+)\}")
 
-    def sub(match: re.Match[str]) -> str:
+
+def render(query: Query, params: dict[str, Any] | None, tables: dict[str, str]) -> str:
+    params = params or {}
+
+    def table(match: re.Match[str]) -> str:
+        qualified = tables.get(match.group(1))
+        if qualified is None:
+            raise UnsafeQuery(f"unknown table {{{match.group(1)}}} in {query.name}")
+        if not _SAFE_PREFIX.match(qualified):
+            raise UnsafeQuery(f"bad qualified table name: {qualified!r}")
+        return qualified
+
+    def param(match: re.Match[str]) -> str:
         key = match.group(1)
         if key not in params:
             raise UnsafeQuery(f"missing parameter :{key} for {query.name}")
         return sql_literal(params[key])
 
-    sql = " ".join(_PARAM.sub(sub, sql).split())
+    sql = _TABLE.sub(table, query.sql)
+    sql = " ".join(_PARAM.sub(param, sql).split())
     assert_read_only(sql)
     return sql
 
@@ -171,26 +181,26 @@ class DuckDBSampleSource:
 
     name = "duckdb-sample"
 
-    def __init__(self, csv_dir: Path, table_prefix: str = "preflight"):
+    SCHEMA = "preflight"
+
+    def __init__(self, csv_dir: Path):
         import duckdb
 
-        if not _SAFE_PREFIX.match(table_prefix) or "." in table_prefix:
-            raise UnsafeQuery("sample prefix must be a single identifier")
-        self.table_prefix = table_prefix
         self.csv_dir = csv_dir
         self._con = duckdb.connect(":memory:")
-        self._con.execute(f"CREATE SCHEMA {table_prefix}")
+        self._con.execute(f"CREATE SCHEMA {self.SCHEMA}")
         csvs = sorted(csv_dir.glob("*.csv"))
         if not csvs:
             raise DataSourceUnavailable(f"no CSV files in {csv_dir}")
         for path in csvs:
             self._con.execute(
-                f"CREATE VIEW {table_prefix}.{path.stem} AS "
+                f"CREATE VIEW {self.SCHEMA}.{path.stem} AS "
                 f"SELECT * FROM read_csv('{path.as_posix()}', header = true, auto_detect = true)"
             )
+        self.tables = {path.stem: f"{self.SCHEMA}.{path.stem}" for path in csvs}
 
     def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
-        sql = render(query, params, self.table_prefix)
+        sql = render(query, params, self.tables)
         started = time.perf_counter()
         try:
             cursor = self._con.execute(sql)
@@ -220,7 +230,7 @@ class ZetarisRestSource:
             raise DataSourceUnavailable("Zetaris not configured, set in .env.local: " + ", ".join(missing))
         if not cfg.zetaris_org_id.isdigit():
             raise DataSourceUnavailable("ZETARIS_ORG_ID must be the numeric organisation ID")
-        self.table_prefix = cfg.zetaris_table_prefix
+        self.tables = dict(cfg.zetaris_tables)
         self.base_url = cfg.zetaris_rest_url
         self.limit = cfg.zetaris_query_limit
         self._org = cfg.zetaris_org_id
@@ -236,7 +246,7 @@ class ZetarisRestSource:
         }
 
     def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
-        sql = render(query, params, self.table_prefix)
+        sql = render(query, params, self.tables)
         query_id = str(uuid.uuid4())
         body = {"queryId": query_id, "sql": sql, "source": "SqlEditor", "limit": self.limit}
         started = time.perf_counter()
