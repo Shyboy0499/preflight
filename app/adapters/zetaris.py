@@ -245,26 +245,39 @@ class ZetarisRestSource:
             "Content-Type": "application/json",
         }
 
-    def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
-        sql = render(query, params, self.tables)
-        query_id = str(uuid.uuid4())
+    def _post(self, sql: str, name: str, query_id: str) -> Any:
         body = {"queryId": query_id, "sql": sql, "source": "SqlEditor", "limit": self.limit}
-        started = time.perf_counter()
         try:
             response = self._client.post(self.base_url + self.RUN_PATH, json=body, headers=self._headers())
         except httpx.TimeoutException as exc:
-            raise DataSourceUnavailable(f"zetaris: {query.name} timed out") from exc
+            raise DataSourceUnavailable(f"zetaris: {name} timed out") from exc
         except httpx.HTTPError as exc:
             raise DataSourceUnavailable(f"zetaris: cannot reach {self.base_url}: {type(exc).__name__}") from exc
         if response.status_code != 200:
             hint = {401: "bad or expired API key", 400: "check ZETARIS_ORG_ID / request IDs / SQL"}.get(response.status_code, "")
-            raise DataSourceUnavailable(
-                f"zetaris: {query.name} HTTP {response.status_code} {hint}: {response.text[:300]}"
-            )
+            raise DataSourceUnavailable(f"zetaris: {name} HTTP {response.status_code} {hint}: {response.text[:300]}")
         try:
-            payload = response.json()
+            return response.json()
         except ValueError as exc:
             raise DataSourceUnavailable("zetaris: response was not JSON") from exc
+
+    def execute_admin(self, sql: str) -> list[dict[str, Any]]:
+        """Run one setup statement (CREATE / REGISTER ...) without the read-only guard.
+
+        For scripts/setup_zetaris.py only. The agent never calls this; a test
+        enforces that nothing under app/ does.
+        """
+        if ";" in sql.strip().rstrip(";"):
+            raise UnsafeQuery("one statement per call")
+        statement = " ".join(sql.strip().rstrip(";").split())
+        payload = self._post(statement, "admin", str(uuid.uuid4()))
+        return self._rows(payload, Query("admin", statement, ())) if isinstance(payload, dict) and "data" in payload else []
+
+    def run(self, query: Query, params: dict[str, Any] | None = None) -> QueryResult:
+        sql = render(query, params, self.tables)
+        query_id = str(uuid.uuid4())
+        started = time.perf_counter()
+        payload = self._post(sql, query.name, query_id)
         rows = self._rows(payload, query)
         return QueryResult(
             query=query.name,

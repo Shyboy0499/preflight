@@ -124,3 +124,25 @@ def test_headers_that_disagree_with_declared_columns_fail_the_query():
     body = {"data": [["38", "S001"]], "headers": ["cap", "staff_id"]}
     with pytest.raises(DataSourceUnavailable, match="returned columns"):
         make(lambda r: httpx.Response(200, json=body)).run(Q, {"sid": "S001"})
+
+
+def test_agent_code_never_uses_the_admin_path():
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    callers = [p for p in app_dir.rglob("*.py") if "execute_admin(" in p.read_text() and p.name != "zetaris.py"]
+    assert callers == []
+
+
+def test_admin_path_sends_one_statement_and_still_rejects_chains():
+    seen = {}
+
+    def handler(request):
+        seen["sql"] = json.loads(request.content)["sql"]
+        return httpx.Response(200, json={"data": [], "headers": []})
+
+    src = make(handler)
+    src.execute_admin('CREATE LIGHTNING DATABASE PREFLIGHT_FILES DESCRIBE BY "x";')
+    assert seen["sql"] == 'CREATE LIGHTNING DATABASE PREFLIGHT_FILES DESCRIBE BY "x"'
+    with pytest.raises(UnsafeQuery):
+        src.execute_admin("CREATE X; DROP Y")
