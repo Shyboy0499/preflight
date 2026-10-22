@@ -227,3 +227,9 @@ def test_shortfall_left_uncovered_is_reported_not_hidden(make_agent, tmp_path):
     assert result.shortfall_remaining == 3
     assert "STILL SHORT by 3" in result.summary
     assert result.investigation
+
+
+def test_stops_trying_once_the_ward_is_known_not_short(make_agent):
+    result = make_agent().run("Ward 9Z needs cover tonight")
+    assert [a.candidate.action for a in result.attempts] == ["no_cover_needed", "offer_shift_to_staff"]
+    assert result.decision == "no_safe_action" and not result.actions

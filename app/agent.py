@@ -214,6 +214,11 @@ class PreflightAgent:
             if not gate.passed:
                 if candidate.origin == "memory":
                     self._penalise_recalled(candidate, request, gate, recall.trace["trace_id"])
+                # Not short (or no demand record): every later candidate needs this
+                # same check and offers only add cover, so none can pass. Stop.
+                if any(r.name == "ward_actually_understaffed" and r.status == "fail" for r in gate.results):
+                    audit.event("stop", reason="ward_actually_understaffed failed; no later candidate can pass")
+                    break
                 continue
             name = reader.display_name(candidate.params.get("staff_id", "")) if "staff_id" in candidate.params else ""
             nurses = gate.shortfall if candidate.action == "escalate_to_agency" and gate.shortfall else 1

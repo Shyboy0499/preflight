@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", help="sample data folder under data/sample (SAMPLE_MODE only)")
     parser.add_argument("--json", action="store_true", help="print the full run as JSON")
     parser.add_argument("--reset-memory", action="store_true", help="forget learned H-MEM memories before running")
+    parser.add_argument("--verbose", action="store_true", help="show every check of every candidate")
     args = parser.parse_args(argv)
 
     if args.scenario:
@@ -54,9 +55,18 @@ def main(argv: list[str] | None = None) -> int:
         rep = result.world["report"]
         print(f"World      {rep['observations']} observations from {rep['queries_run']} Zetaris queries" + (f"  ERRORS: {rep['errors']}" if rep["errors"] else ""))
     print()
+    names = (result.world or {}).get("names", {})
     for a in result.attempts:
-        mark = "PASS" if a.passed else "FAIL"
-        print(f"[{mark}] {a.candidate.label()}  <{a.candidate.origin}> {a.candidate.reason}")
+        sid = a.candidate.params.get("staff_id")
+        who = f" [{names.get(sid, sid)}]" if sid else ""
+        if not a.passed and not args.verbose:  # compact: one line, the failed checks and first evidence row
+            failed = "; ".join(f"{r.name}: {r.explanation}" for r in a.failed)
+            print(f"[FAIL] {a.candidate.label()}{who} <{a.candidate.origin}>  {failed}")
+            row = next((r.evidence[0] for r in a.failed if r.evidence), None)
+            if row and a.candidate.origin != "backfill":
+                print(f"         evidence {row}")
+            continue
+        print(f"[{'PASS' if a.passed else 'FAIL'}] {a.candidate.label()}{who} <{a.candidate.origin}> {a.candidate.reason}")
         for r in a.results:
             sym = {"pass": "  ok ", "fail": "  XX ", "error": "  ?? "}[r.status]
             print(f"{sym} {r.name}: {r.explanation}")
@@ -64,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
                 for row in r.evidence[:3]:
                     print(f"         evidence {row}")
     print()
-    print(result.summary)
+    # Refusals are listed above; print the outcome lines only.
+    print("\n".join(line for line in result.summary.splitlines() if not line.startswith("  refused ")))
     if result.investigation:
         print("\nInvestigation (for the manager):\n" + result.investigation)
     print(f"\nTrace: {cfg.logs_dir / 'trace.jsonl'}  (run_id {result.run_id})")

@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 64 tests
+pytest                                                                                       # 65 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -60,15 +60,15 @@ CLI options: `--scenario scenario_a|scenario_b`, `--json` (full run as JSON), `-
 
 ## Sample inputs and outputs
 
-Run in this order from a fresh clone (memory carries over between runs). The outputs are trimmed.
+Real CLI output (compact view; `--verbose` shows every check), run in this order from a fresh clone so
+memory carries over. Regenerate with the commands in the Quick start.
 
-**1. `"Ward 4B needs night cover tomorrow"` on scenario A: the action fires**
+**1. `"Ward 4B needs night cover tomorrow"` on scenario A: the offer fires**
 ```
-Parsed     Ward 4B night shift 2026-10-27  (via generator)
-World      54 observations from 5 Zetaris queries
-[FAIL] no_cover_needed()
-  XX  ward_adequately_staffed: 3 of 4 required nurses available (after approved leave)
-[PASS] offer_shift_to_staff(staff_id=S001)  <planner> free that day, has required skill, home ward, 8h this week
+Recalled   0 H-MEM memories
+[FAIL] no_cover_needed() <default>  ward_adequately_staffed: 3 of 4 required nurses available (after approved leave)
+         evidence {'ward': '4B', 'shift_date': '2026-10-27', 'shift_type': 'night', 'required_nurses': 4, 'required_skill': 'cardiac_telemetry', 'available_rostered': 3}
+[PASS] offer_shift_to_staff(staff_id=S001) [Priya Raman] <planner> free that day, has required skill, home ward, 8h this week
   ok  ward_actually_understaffed: 3 of 4 required nurses available (after approved leave)
   ok  staff_not_on_leave: no approved leave on the shift date
   ok  has_required_skill: holds cardiac_telemetry
@@ -77,50 +77,86 @@ World      54 observations from 5 Zetaris queries
 FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001): Ward 4B night shift 2026-10-27.
 ```
 
-**2. The same request on scenario B: Priya is refused with evidence, then agency**
+**2. The same request on scenario B: memory suggests Priya, the gate refuses her with evidence, agency**
 ```
 Recalled   1 H-MEM memories
-           0.40  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (...)
-[FAIL] offer_shift_to_staff(staff_id=S001)  <memory> covered this shift pattern before (memory), ...
-  XX  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+           0.40  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understaff
+[FAIL] no_cover_needed() <default>  ward_adequately_staffed: 3 of 4 required nurses available (after approved leave)
+         evidence {'ward': '4B', 'shift_date': '2026-10-27', 'shift_type': 'night', 'required_nurses': 4, 'required_skill': 'cardiac_telemetry', 'available_rostered': 3}
+[FAIL] offer_shift_to_staff(staff_id=S001) [Priya Raman] <memory>  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
          evidence {'staff_id': 'S001', 'leave_type': 'annual', 'start_date': '2026-10-26', 'end_date': '2026-10-30', 'status': 'approved'}
-[FAIL] offer_shift_to_staff(staff_id=S003)   XX under_weekly_hour_cap: 38h rostered + 10h shift vs 38h cap
-[FAIL] offer_shift_to_staff(staff_id=S002)   XX has_required_skill: missing required skill cardiac_telemetry
-[FAIL] offer_shift_to_staff(staff_id=S008)   XX no_conflicting_shift: rostered 3A day 2026-10-27 07:00:00 to 15:30:00 (< 10h rest)
-[PASS] escalate_to_agency()
+[FAIL] offer_shift_to_staff(staff_id=S003) [Sam Okafor] <planner>  under_weekly_hour_cap: 38h rostered + 10h shift vs 38h cap
+         evidence {'staff_id': 'S003', 'weekly_hour_cap': 38, 'rostered_hours': 38}
+[FAIL] offer_shift_to_staff(staff_id=S002) [Tom Becker] <planner>  has_required_skill: missing required skill cardiac_telemetry
+         evidence {'required_skill': 'cardiac_telemetry', 'held_skill': None}
+[FAIL] offer_shift_to_staff(staff_id=S008) [Raj Patel] <planner>  no_conflicting_shift: rostered 3A day 2026-10-27 07:00:00 to 2026-10-27 15:30:00 (< 10h rest)
+         evidence {'shift_id': 'R1010', 'ward': '3A', 'shift_date': '2026-10-27', 'shift_type': 'day', 'start_ts': '2026-10-27 07:00:00', 'end_ts': '2026-10-27 15:30:00'}
+[FAIL] ... 5 more staff from the rest of the pool (backfill), each refused with evidence
+[PASS] escalate_to_agency() <default> fallback when no internal staff pass
+  ok  ward_actually_understaffed: 3 of 4 required nurses available (after approved leave)
+  ok  agency_allowed_for_ward: agency allowed
 FIRED escalate_to_agency(): Agency request raised for 1 nurse: Ward 4B night shift 2026-10-27.
-  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite:
-  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite: staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
 ```
 
 **3. `"Ward 4B day shift tomorrow - do we need anyone?"`: nobody is contacted**
 ```
-[PASS] no_cover_needed()
+Recalled   2 H-MEM memories
+           0.45  Ward 4B night cover: escalate_to_agency() passed all checks (ward_actually_understaffed, agency_allo
+           0.33  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understaff
+[PASS] no_cover_needed() <default> check whether the shift is already covered
   ok  ward_adequately_staffed: 5 of 5 required nurses available (after approved leave)
 FIRED no_cover_needed(): No cover needed: Ward 4B day shift 2026-10-27 is fully staffed. Nobody contacted.
 ```
 
 **4. `"Ward 9Z needs cover tonight"`: no safe action, so it investigates instead**
 ```
-[FAIL] escalate_to_agency()
-  XX  ward_actually_understaffed: no demand record for 9Z night 2026-10-26
-  XX  agency_allowed_for_ward: ward 9Z not found
+Recalled   0 H-MEM memories
+[FAIL] no_cover_needed() <default>  ward_adequately_staffed: no demand record for 9Z night 2026-10-26
+[FAIL] offer_shift_to_staff(staff_id=S001) [Priya Raman] <planner>  ward_actually_understaffed: no demand record for 9Z night 2026-10-26; has_required_skill: no demand…
 NO ACTION: no candidate passed every check. Escalated to the manager with evidence.
+  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite: ward_actually_understaffed: no demand record for 9Z night 2026-10-26; has_r…
 Investigation (for the manager):
-No action passed its checks for Ward 9Z night shift 2026-10-26. Do not book anyone automatically. ...
+No action passed its checks for Ward 9Z night shift 2026-10-26. Do not book anyone automatically.
+- no_cover_needed() refused: ward_adequately_staffed: no demand record for 9Z night 2026-10-26
+- offer_shift_to_staff(staff_id=S001) refused: ward_actually_understaffed: no demand record for 9Z night 2026-10-26; has_required_skill: no demand record to compare sk…
+Recommended: the unit manager reviews the evidence above and decides manually.
 ```
 
 **5. `"Ward 4B needs evening cover tomorrow"`: 0 of 4 rostered, so the whole gap gets covered**
 ```
+Recalled   3 H-MEM memories
+           0.46  Ward 4B day cover: no_cover_needed() passed all checks (ward_adequately_staffed) for 2026-10-27.
+           0.45  Ward 4B night cover: escalate_to_agency() passed all checks (ward_actually_understaffed, agency_allo
+           0.33  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understaff
+[FAIL] no_cover_needed() <default>  ward_adequately_staffed: 0 of 4 required nurses available (after approved leave)
+         evidence {'ward': '4B', 'shift_date': '2026-10-27', 'shift_type': 'evening', 'required_nurses': 4, 'required_skill': 'cardiac_telemetry', 'available_rostered'…
+[PASS] offer_shift_to_staff(staff_id=S001) [Priya Raman] <planner> free that day, has required skill, home ward, 8h this week
+  ok  ward_actually_understaffed: 0 of 4 required nurses available (after approved leave)
+  ok  staff_not_on_leave: no approved leave on the shift date
+  ok  has_required_skill: holds cardiac_telemetry
+  ok  under_weekly_hour_cap: 8h rostered + 8h shift vs 38h cap
+  ok  no_conflicting_shift: no overlapping shift and rest gap respected
+[FAIL] offer_shift_to_staff(staff_id=S003) [Sam Okafor] <planner>  under_weekly_hour_cap: 38h rostered + 8h shift vs 38h cap
+         evidence {'staff_id': 'S003', 'weekly_hour_cap': 38, 'rostered_hours': 38}
+[FAIL] offer_shift_to_staff(staff_id=S002) [Tom Becker] <planner>  has_required_skill: missing required skill cardiac_telemetry
+         evidence {'required_skill': 'cardiac_telemetry', 'held_skill': None}
+[FAIL] offer_shift_to_staff(staff_id=S008) [Raj Patel] <planner>  no_conflicting_shift: rostered 3A day 2026-10-27 07:00:00 to 2026-10-27 15:30:00 (< 10h rest)
+         evidence {'shift_id': 'R1010', 'ward': '3A', 'shift_date': '2026-10-27', 'shift_type': 'day', 'start_ts': '2026-10-27 07:00:00', 'end_ts': '2026-10-27 15:30:00'}
+[FAIL] ... 8 more staff from the rest of the pool (backfill), each refused with evidence
+[PASS] escalate_to_agency() <default> fallback when no internal staff pass
+  ok  ward_actually_understaffed: 0 + 1 offered in this run of 4 required nurses available (after approved leave)
+  ok  agency_allowed_for_ward: agency allowed
 FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001): Ward 4B evening shift 2026-10-27.
 FIRED escalate_to_agency(): Agency request raised for 3 nurses: Ward 4B evening shift 2026-10-27.
-  refused offer_shift_to_staff(staff_id=S003) [Sam Okafor]: under_weekly_hour_cap (38h rostered + 8h shift vs 38h cap)
-  ...
 ```
-Each offer that fires counts toward the next `ward_actually_understaffed` check
-("0 + 1 offered in this run of 4"), so Preflight keeps offering until the gap is closed. The agency
-is asked only for the nurses still missing. If nothing else passes, for example when ward policy
-forbids agency staff, the run ends `partially_covered` and reports how many nurses are still missing.
+
+Each offer that fires counts toward the next `ward_actually_understaffed` check ("0 + 1 offered in
+this run of 4"), so Preflight keeps offering until the gap is closed. The agency is asked only for
+the nurses still missing. If nothing else passes, for example when ward policy forbids agency staff,
+the run ends `partially_covered` and reports how many nurses are still missing. Once
+`ward_actually_understaffed` fails (the ward isn't short, or has no demand record), no later candidate
+can pass, so Preflight stops trying (sample 4).
 
 A request without a ward, date or shift (for example `"someone called in sick"`) is rejected as
 `unparsed` and nothing is done.
