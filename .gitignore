@@ -13,3 +13,4 @@ logs/*
 !logs/.gitkeep
 .skillpilot/
 .DS_Store
+.env.local
