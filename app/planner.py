@@ -5,7 +5,7 @@ H-MEM memories. Its output is validated against the action library and the
 staff pool; anything else is dropped. The outer order is fixed policy:
 
   1. no_cover_needed     (cheapest outcome; its check proves the shift is covered)
-  2. offers to staff     (memory-recalled first, then the generator's ranking)
+  2. offers to staff     (memory-recalled first and always included, then the generator's ranking)
   3. escalate_to_agency  (costs money, so last)
 """
 
@@ -92,7 +92,14 @@ def plan(
         if c.key() not in {o.key() for o in offers}:
             offers.append(c)
 
-    # Memory-recalled staff go first even if the generator ranked them lower.
+    # Memory-recalled staff are always tried, first, even if the generator left
+    # them out: recall is a suggestion, and the gate is what checks it against
+    # today's data. A stale memory is refused with evidence, never silently trusted.
+    proposed_ids = {o.params["staff_id"] for o in offers}
+    for staff_id in remembered:
+        if staff_id in known_staff and staff_id not in proposed_ids:
+            offers.append(Candidate("offer_shift_to_staff", {"staff_id": staff_id},
+                                    "recalled from H-MEM (not ranked by the generator)", "memory"))
     offers.sort(key=lambda c: c.origin != "memory")
     offers = offers[:MAX_OFFERS]
     candidates = [

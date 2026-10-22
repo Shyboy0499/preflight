@@ -148,7 +148,7 @@ request ─► parse (generator, validated; rule fallback)
   `unverifiable`. Live mode never falls back to the sample CSVs.
 - **Checks always query the source directly.** They never read the World Model's cached copy, which
   could be out of date.
-- **Memory can't skip checks.** A recalled template that fails gets `not_helpful` feedback in the
+- **Memory can't skip checks.** Recalled staff are always tried first, even if the LLM left them out, so a stale memory is caught by the gate rather than quietly trusted. A recalled template that fails gets `not_helpful` feedback in the
   H-MEM trust ledger.
 - **Read-only data access.** One statement per call, no semicolons, `SELECT`/`WITH`/`SHOW`/`DESCRIBE`
   only, and parameters rendered as typed literals from validated values. This follows the Zetaris

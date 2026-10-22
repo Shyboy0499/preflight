@@ -170,3 +170,20 @@ def test_live_mode_without_demo_today_refuses_to_start(monkeypatch):
     monkeypatch.setenv("DEMO_TODAY", "")
     with pytest.raises(ConfigError, match="DEMO_TODAY"):
         load_config(sample_mode=False)
+
+
+def test_recalled_staff_are_gated_even_when_the_generator_skips_them(make_agent):
+    make_agent("scenario_a").run(NIGHT)  # learns: 4B night -> offer to S001
+
+    def skips_priya(prompt, system_prompt):
+        if "plan_candidates" in system_prompt:
+            return '{"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "S003"}}]}'
+        from app.adapters.llm import rule_based_generator
+        return rule_based_generator(prompt, system_prompt)
+
+    result = make_agent("scenario_b", generator=skips_priya).run(NIGHT)
+    first_offer = next(a for a in result.attempts if a.candidate.action == "offer_shift_to_staff")
+    assert first_offer.candidate.params == {"staff_id": "S001"} and first_offer.candidate.origin == "memory"
+    assert [r.name for r in first_offer.failed] == ["staff_not_on_leave"]
+    assert result.naive["would_fire"] == "offer_shift_to_staff(staff_id=S001)" and result.naive["unsafe"]
+    assert result.fired["action"] == "escalate_to_agency"
