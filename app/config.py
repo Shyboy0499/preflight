@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_TODAY = date(2026, 10, 26)  # the synthetic data is anchored to this Monday
 
 
+class ConfigError(RuntimeError):
+    """Configuration is missing or inconsistent; the agent must not start."""
+
+
 def _flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -54,11 +58,23 @@ def load_config(**overrides) -> Config:
     load_dotenv(ROOT / ".env.local", override=False)
     env = os.environ.get
     demo_today = (env("DEMO_TODAY") or "").strip()
-    sample_mode = _flag("SAMPLE_MODE", True)
+    sample_mode = overrides.get("sample_mode", _flag("SAMPLE_MODE", True))
+    if "today" in overrides:
+        today = overrides["today"]
+    elif demo_today:
+        today = date.fromisoformat(demo_today)
+    elif sample_mode:
+        today = SAMPLE_TODAY  # never the system clock: results are identical on any date
+    else:
+        raise ConfigError(
+            "Live mode needs DEMO_TODAY (YYYY-MM-DD) in .env.local. The demo data loaded into Zetaris "
+            f"is anchored to {SAMPLE_TODAY.isoformat()}, so set DEMO_TODAY={SAMPLE_TODAY.isoformat()} "
+            "for the demo, or to the real date when running against live hospital data."
+        )
     cfg = dict(
         sample_mode=sample_mode,
         sample_scenario=env("SAMPLE_SCENARIO") or "scenario_a",
-        today=date.fromisoformat(demo_today) if demo_today else (SAMPLE_TODAY if sample_mode else date.today()),
+        today=today,
         logs_dir=Path(env("PREFLIGHT_LOGS_DIR") or ROOT / "logs"),
         state_dir=Path(env("PREFLIGHT_STATE_DIR") or ROOT / "state"),
         data_dir=ROOT / "data" / "sample",

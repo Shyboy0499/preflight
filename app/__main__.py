@@ -22,9 +22,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from app.agent import PreflightAgent
     from app.adapters.zetaris import DataSourceUnavailable
-    from app.config import load_config
+    from app.config import ConfigError, load_config
 
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
     if args.reset_memory:
         shutil.rmtree(cfg.state_dir, ignore_errors=True)
     try:

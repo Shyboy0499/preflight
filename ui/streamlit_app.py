@@ -12,11 +12,15 @@ import streamlit as st  # noqa: E402
 
 from app.adapters.zetaris import DataSourceUnavailable  # noqa: E402
 from app.agent import PreflightAgent  # noqa: E402
-from app.config import load_config  # noqa: E402
+from app.config import ConfigError, load_config  # noqa: E402
 
 st.set_page_config(page_title="Preflight", page_icon="✈️", layout="wide")
 
-base = load_config()
+try:
+    base = load_config()
+except ConfigError as exc:
+    st.error(f"Configuration error: {exc}")
+    st.stop()
 st.title("Preflight")
 st.caption("A shift-cover agent that checks before it acts. Every action is gated by SQL precondition checks against live data.")
 

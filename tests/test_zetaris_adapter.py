@@ -19,7 +19,7 @@ SECRET = "test-key-do-not-log"
 
 
 def make(handler):
-    cfg = load_config(sample_mode=False, zetaris_api_key=SECRET, zetaris_org_id="1", zetaris_table_prefix="hospital")
+    cfg = load_config(sample_mode=False, today=date(2026, 10, 26), zetaris_api_key=SECRET, zetaris_org_id="1", zetaris_table_prefix="hospital")
     return ZetarisRestSource(cfg, client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
@@ -81,7 +81,7 @@ def test_rest_timeout_becomes_unavailable():
 
 def test_missing_credentials_is_reported_by_name():
     with pytest.raises(DataSourceUnavailable, match="ZETARIS_API_KEY"):
-        ZetarisRestSource(load_config(sample_mode=False, zetaris_api_key="", zetaris_org_id="1"))
+        ZetarisRestSource(load_config(sample_mode=False, today=date(2026, 10, 26), zetaris_api_key="", zetaris_org_id="1"))
 
 
 def test_metadata_query_takes_column_names_from_headers():

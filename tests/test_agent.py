@@ -142,3 +142,31 @@ def test_unreachable_data_source_means_no_action(make_agent):
     assert result.decision == "unverifiable"
     assert result.fired is None
     assert result.world["report"]["errors"]
+
+
+class _AfterTheEvent(__import__("datetime").date):
+    @classmethod
+    def today(cls):
+        return cls(2027, 3, 1)
+
+
+def test_sample_runs_after_the_event_still_give_the_ab_results(make_agent, monkeypatch):
+    import app.config
+
+    monkeypatch.setattr(app.config, "date", _AfterTheEvent)
+    monkeypatch.delenv("DEMO_TODAY", raising=False)
+    a = make_agent("scenario_a")
+    assert a.cfg.today.isoformat() == "2026-10-26"
+    assert a.run(NIGHT).fired["params"] == {"staff_id": "S001"}
+    b = make_agent("scenario_b").run(NIGHT)
+    assert b.fired["action"] == "escalate_to_agency"
+    assert b.naive["unsafe"] is True
+
+
+def test_live_mode_without_demo_today_refuses_to_start(monkeypatch):
+    from app.config import ConfigError
+
+    monkeypatch.delenv("DEMO_TODAY", raising=False)
+    monkeypatch.setenv("DEMO_TODAY", "")
+    with pytest.raises(ConfigError, match="DEMO_TODAY"):
+        load_config(sample_mode=False)
