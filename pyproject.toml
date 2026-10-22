@@ -1,0 +1,20 @@
+[project]
+name = "preflight"
+version = "0.1.0"
+description = "A shift-cover agent that checks before it acts."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "duckdb>=1.1,<2",
+    "openai>=1.50,<3",
+    "python-dotenv>=1.0,<2",
+    "streamlit>=1.38,<2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false

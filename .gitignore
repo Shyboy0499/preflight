@@ -1,0 +1,15 @@
+# Secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Local state and run output
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+state/
+logs/*
+!logs/.gitkeep
+.skillpilot/
+.DS_Store
