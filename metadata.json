@@ -8,23 +8,50 @@
   "entrypoints": {
     "cli": "python -m app \"Ward 4B needs night cover tomorrow\"",
     "ui": "streamlit run ui/streamlit_app.py",
-    "tests": "pytest"
+    "tests": "pytest",
+    "live_setup": "python scripts/setup_zetaris.py --apply",
+    "live_toggle": "python scripts/demo_toggle_leave.py on|off|status"
   },
   "sample_mode": "SAMPLE_MODE=true runs the full demo with no credentials (DuckDB over synthetic CSVs, rule-based generator)",
   "sponsor_technology": {
     "zetaris": {
-      "role": "Source of all facts and every precondition check (read-only SQL over the direct REST API)",
-      "code": ["app/adapters/zetaris.py", "app/preconditions/checks.py", "app/preconditions/gate.py", "app/meterless/world_model.py"]
+      "role": "Federates the three source systems (CSV file source, Postgres leave system, REST skills service); every fact and precondition check is read-only SQL over its direct REST API, with cross-source joins in single statements",
+      "code": [
+        "app/adapters/zetaris.py",
+        "app/preconditions/checks.py",
+        "app/preconditions/gate.py",
+        "app/meterless/world_model.py",
+        "scripts/setup_zetaris.py"
+      ]
     },
     "meterless": {
-      "engines": ["H-MEM", "World Model"],
-      "code": ["app/meterless/hmem.py", "app/meterless/world_model.py", "app/adapters/llm.py"]
+      "engines": [
+        "H-MEM",
+        "World Model"
+      ],
+      "code": [
+        "app/meterless/hmem.py",
+        "app/meterless/world_model.py",
+        "app/adapters/llm.py"
+      ]
     },
-    "llm": {
-      "provider": "NVIDIA Nemotron via OpenAI-compatible endpoint (configurable)",
-      "code": ["app/adapters/llm.py"]
+    "nvidia": {
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b (via NVIDIA_MODEL)",
+      "endpoint": "https://integrate.api.nvidia.com/v1 (OpenAI-compatible)",
+      "role": "The single injected generator: parses the request, ranks candidate staff from World Model facts and H-MEM memories, and writes the investigation when nothing passes. It never decides whether an action fires; the SQL checks do.",
+      "code": [
+        "app/adapters/llm.py",
+        "app/request_parser.py",
+        "app/planner.py",
+        "app/agent.py"
+      ]
     }
   },
   "data": "Synthetic only (data/sample/)",
-  "logs": ["logs/trace.jsonl", "logs/decisions.jsonl", "logs/outbox.jsonl", "logs/hmem_ledger.jsonl"]
+  "logs": [
+    "logs/trace.jsonl",
+    "logs/decisions.jsonl",
+    "logs/outbox.jsonl",
+    "logs/hmem_ledger.jsonl"
+  ]
 }

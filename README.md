@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 37 tests
+pytest                                                                                       # 59 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -166,9 +166,22 @@ It is used by:
 - `app/preconditions/gate.py`: every precondition check (7 SQL queries in `checks.py`)
 - `app/meterless/world_model.py`: `IngestPipelineService` (5 scope queries)
 
+In live mode the six tables sit in **three different systems**, and Zetaris federates them:
+
+| Zetaris source | Kind | Tables | Stands in for |
+|---|---|---|---|
+| `PREFLIGHT_FILES` | Lightning file source (CSV) | `staff`, `roster`, `demand`, `wards` | rostering and patient-demand exports |
+| `preflight_pg` | JDBC datasource (Postgres) | `leave` | the leave system |
+| `PREFLIGHT_API` | Lightning REST source (`services/skills_api.py`) | `staff_skills` | the HR skills system |
+
+Two checks join across sources in a **single SQL statement**: `ward_actually_understaffed`
+(file + Postgres) and `has_required_skill` (file + REST). `tests/test_gate.py` pins this.
+`ZETARIS_TABLES` maps each table to its qualified name.
+
 Every query result carries provenance (source, query name, query ID, rendered SQL, fetch time) into
-the World Model observations and into each check's evidence. In sample mode `DuckDBSampleSource` runs
-**the same rendered SQL text** over the CSVs.
+the World Model observations and into each check's evidence. Column names are checked against the
+response `headers`. In sample mode `DuckDBSampleSource` runs **the same rendered SQL text** over the
+CSVs.
 
 ### Meterless engines (2 used)
 | Engine | Services implemented | Used where |
@@ -182,22 +195,45 @@ project. The World Model docs name the contracts `IngestPipeline` and `ReadSurfa
 `IngestPipelineService` and `ContextBuilderService`. Not implemented: H-MEM mining, dreaming, sleep
 and conflict detection, and World Model enrichment and control plane.
 
-The **generator pattern** is in `app/adapters/llm.py`. It is the only place a model is called.
-Default provider: NVIDIA Nemotron via `https://integrate.api.nvidia.com/v1`, with the model from
-`NVIDIA_MODEL`.
+### NVIDIA Nemotron (the generator)
+The **generator pattern** is in `app/adapters/llm.py`. One `generator(prompt, system_prompt)` is the
+only place a model is called. It goes to NVIDIA's OpenAI-compatible endpoint
+(`https://integrate.api.nvidia.com/v1`), with the model from `NVIDIA_MODEL`. Nemotron does three
+jobs, and none of them can let an action through on its own:
+
+| Job | Where | What Nemotron does |
+|---|---|---|
+| Parse the request | `app/request_parser.py` | Free text → `{ward, shift_date, shift_type}` JSON, then validated |
+| Plan candidates | `app/planner.py` | Ranks staff using World Model facts and H-MEM memories; unknown staff or actions are dropped |
+| Investigate | `app/agent.py` | When nothing passes, explains the refusals for the manager |
+
+Model choice, from a test on 2026-10-22 running both scenarios through these tasks:
+`nvidia/nemotron-3.5-lightning-30b-a3b` returned valid JSON on every call, about 5 s per full run,
+and gave the expected A/B decisions. `nemotron-3-ultra-550b-a55b` was equally correct but slower.
+The super and nano models were not enabled for our account. Reasoning is switched off by default
+(`chat_template_kwargs.enable_thinking=false`, `LLM_REASONING` to change it). With reasoning on,
+these models used the whole token budget on hidden reasoning and returned empty answers. Empty or
+failed replies fall back to the rule-based generator and are logged as `llm_fallback`.
 
 ## Live mode (real Zetaris and LLM)
 
-1. `cp .env.example .env.local` (gitignored) and fill in:
-   - `SAMPLE_MODE=false`
-   - `ZETARIS_REST_URL` (local: `http://localhost:8888/api/v1.0`), `ZETARIS_ORG_ID` (numeric, from
-     Management → Organisation), `ZETARIS_API_KEY` (Management → API Tokens)
-   - `ZETARIS_TABLE_PREFIX`: the qualifier for the six tables (`staff`, `staff_skills`, `roster`,
-     `leave`, `demand`, `wards`) as Lightning SQL sees them
-   - `NVIDIA_API_KEY`, `NVIDIA_MODEL` (or `LLM_BASE_URL` for any server that uses the same API)
-2. Load the CSVs from `data/sample/<scenario>/` into Zetaris under that prefix, with the same
-   column names.
-3. Run `python -m app "Ward 4B needs night cover tomorrow"`.
+Needs Docker and a local Zetaris instance (see
+[zetaris/getting-started](https://github.com/zetaris/getting-started)).
+
+1. `cp .env.example .env.local` (gitignored) and fill in `ZETARIS_ORG_ID` (numeric, Management →
+   Organisation), `ZETARIS_API_KEY` (Management → API Tokens), `NVIDIA_API_KEY`, and
+   `PREFLIGHT_PG_PASSWORD` (any local password for the demo Postgres).
+2. Start the skills service: `uvicorn services.skills_api:app --host 127.0.0.1 --port 8077`
+3. `python scripts/setup_zetaris.py` shows a dry run. `python scripts/setup_zetaris.py --apply`
+   creates the Postgres container, copies the CSVs, registers the three sources, verifies them and
+   prints the `ZETARIS_TABLES` line. It is safe to re-run.
+4. In `.env.local` set `SAMPLE_MODE=false`, `DEMO_TODAY=2026-10-26` and the printed `ZETARIS_TABLES`.
+   **`DEMO_TODAY` is required in live mode**: the demo data is anchored to 26 Oct 2026, so the real
+   date would find no demand. Sample mode never reads the system clock.
+5. Run `python -m app "Ward 4B needs night cover tomorrow"` (scenario A).
+6. Flip to scenario B live: `python scripts/demo_toggle_leave.py on` adds Priya's approved leave in
+   Postgres and reads it back through Zetaris. Run the same request again: Preflight now refuses
+   Priya with the leave row as evidence. `demo_toggle_leave.py off` switches back.
 
 If the LLM is unreachable, each call falls back to the rule-based generator and an `llm_fallback`
 event is logged. If Zetaris is unreachable, nothing fires.
@@ -216,7 +252,9 @@ Learned memories persist in `state/hmem_memories.json` (gitignored).
 ## Dependencies
 
 Python 3.12, `duckdb` (sample data source), `httpx` (Zetaris REST), `openai` (OpenAI-compatible
-client for NVIDIA), `python-dotenv`, `streamlit`, `pytest`. See `requirements.txt` / `pyproject.toml`.
+client for NVIDIA), `python-dotenv`, `streamlit`, `fastapi` + `uvicorn` (skills service), `psycopg`
+(demo Postgres scripts), `pytest`. See `requirements.txt` / `pyproject.toml`. Live mode also needs
+Docker.
 
 ## Data
 
