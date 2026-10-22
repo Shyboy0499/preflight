@@ -49,6 +49,8 @@ class Config:
     llm_model: str
     llm_base_url: str
     llm_timeout_s: float
+    llm_reasoning: bool
+    llm_max_tokens: int
 
     @property
     def llm_configured(self) -> bool:
@@ -108,6 +110,8 @@ def load_config(**overrides) -> Config:
         llm_model=env("NVIDIA_MODEL") or "",
         llm_base_url=env("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1",
         llm_timeout_s=float(env("LLM_TIMEOUT_S") or 30),
+        llm_reasoning=_flag("LLM_REASONING", False),
+        llm_max_tokens=int(env("LLM_MAX_TOKENS") or 2048),
     )
     cfg.update(overrides)
     if "zetaris_table_prefix" in overrides and "zetaris_tables" not in overrides:

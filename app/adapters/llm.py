@@ -115,19 +115,31 @@ def rule_based_generator(prompt: str, system_prompt: str) -> str:
 # --- live provider --------------------------------------------------------------
 
 
+class EmptyReply(RuntimeError):
+    """The model returned no usable content (e.g. reasoning used up the token budget)."""
+
+
 def openai_compatible_generator(cfg: Config) -> Generator:
     from openai import OpenAI
 
     client = OpenAI(base_url=cfg.llm_base_url, api_key=cfg.llm_api_key, timeout=cfg.llm_timeout_s, max_retries=1)
+    # Nemotron reasoning models spend the whole budget on hidden reasoning for
+    # these short structured tasks unless thinking is switched off.
+    extra_body = None if cfg.llm_reasoning else {"chat_template_kwargs": {"enable_thinking": False}}
 
     def generate(prompt: str, system_prompt: str) -> str:
         reply = client.chat.completions.create(
             model=cfg.llm_model,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=1200,
+            max_tokens=cfg.llm_max_tokens,
+            extra_body=extra_body,
         )
-        return THINK_BLOCK.sub("", reply.choices[0].message.content or "").strip()
+        choice = reply.choices[0]
+        text = THINK_BLOCK.sub("", choice.message.content or "").strip()
+        if not text:
+            raise EmptyReply(f"empty reply from {cfg.llm_model} (finish_reason={choice.finish_reason})")
+        return text
 
     return generate
 
