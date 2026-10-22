@@ -189,7 +189,10 @@ class PreflightAgent:
 
         result = RunResult(
             run_id, text, request, parse_path, "no_safe_action", "", memory_trace=recall.trace,
-            world={"report": report.to_dict(), "context": context, "staff_pool": pool, "demand": demand or None},
+            world={
+                "report": report.to_dict(), "context": context, "staff_pool": pool, "demand": demand or None,
+                "names": {p["staff_id"]: reader.display_name(p["staff_id"]) for p in pool},  # local display only
+            },
             generator=self.generator_name, data_source=source_name,
         )
         naive_pick = next((c for c in candidates if c.action == "offer_shift_to_staff"), None)
