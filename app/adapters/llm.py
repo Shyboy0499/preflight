@@ -78,7 +78,8 @@ def _rule_plan(data: dict[str, Any]) -> str:
         if p["staff_id"] in remembered:
             why.append("covered this shift pattern before (memory)")
         why.append("already works that day" if p.get("shifts_on_date") else "free that day")
-        why.append("has required skill" if p.get("has_required_skill") else "lacks required skill")
+        has_skill = p.get("has_required_skill")
+        why.append("skill requirement unknown" if has_skill is None else "has required skill" if has_skill else "lacks required skill")
         why.append("home ward" if p.get("home_ward") == data["ward"] else f"floats from {p.get('home_ward')}")
         why.append(f"{p.get('week_hours')}h this week")
         candidates.append({"action": "offer_shift_to_staff", "params": {"staff_id": p["staff_id"]}, "reason": ", ".join(why)})

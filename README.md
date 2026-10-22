@@ -1,1 +1,223 @@
-# preflight
+# Preflight
+
+**A shift-cover agent that checks before it acts.**
+
+When a nurse calls in sick, a unit manager has to cross-check rosters, leave records, staff skills and
+patient demand, which all live in different systems. It's easy to book someone who is on leave, not
+qualified or over their hours. Preflight takes a plain-English request such as *"Ward 4B needs night
+cover tomorrow"* and:
+
+1. **Plans** candidate actions from a fixed action library (`offer_shift_to_staff`,
+   `escalate_to_agency`, `no_cover_needed`), ranked using facts and memory.
+2. **Checks** each candidate's preconditions as SQL against live data through **Zetaris**: not on
+   leave, has the required skill, under the weekly hour cap, rest gap respected, ward actually
+   understaffed, and agency allowed.
+3. **Acts only if every check passes.** If any check fails it does not act. It records which check
+   failed, with the evidence rows, then tries the next candidate. If nothing passes, it writes an
+   investigation for the manager and books nobody.
+4. **Logs** every step with provenance as JSONL in `logs/`.
+5. **Learns**: each successful resolution is saved to **H-MEM** as a reusable action template that
+   still has to pass its checks. A recalled template only changes the order candidates are tried in.
+   It never skips a check.
+
+GenAI.works Open Agent Hackathon 2026, Track 3: Reasoning Architecture.
+
+## The demo in one picture
+
+Same request, two data states. The only difference is one row in the leave system:
+
+| | Scenario A | Scenario B (Priya has approved annual leave, recorded only in `leave.csv`) |
+|---|---|---|
+| Naive agent (top-ranked pick, no checks) | Books Priya ✅ | **Books Priya, who is on leave** ❌ |
+| Preflight | Offers to Priya: 5/5 checks pass | Refuses Priya (`staff_not_on_leave`, with the leave row), Sam (`under_weekly_hour_cap`), Tom (`has_required_skill`), Raj (`no_conflicting_shift`), then **escalates to agency** |
+
+In scenario B, H-MEM even *recommends* Priya, because she covered this shift pattern in scenario A.
+The gate refuses her anyway and the memory's confidence is lowered in the trust ledger. Memory
+suggests; data decides.
+
+## Quick start (sample mode, no credentials)
+
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/) (or plain `pip`).
+
+```bash
+git clone https://github.com/Shyboy0499/preflight.git && cd preflight
+uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
+# or: python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+source .venv/bin/activate
+
+SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
+SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
+SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
+pytest                                                                                       # 37 tests
+```
+
+`SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
+LLM for a deterministic rule-based generator. "Today" is fixed at Mon 2026-10-26 to match the
+synthetic data, so "tomorrow" is 2026-10-27.
+
+CLI options: `--scenario scenario_a|scenario_b`, `--json` (full run as JSON), `--reset-memory`
+(forget learned H-MEM memories).
+
+## Sample inputs and outputs
+
+Run in this order from a fresh clone (memory carries over between runs). The outputs are trimmed.
+
+**1. `"Ward 4B needs night cover tomorrow"` on scenario A: the action fires**
+```
+Parsed     Ward 4B night shift 2026-10-27  (via generator)
+World      54 observations from 5 Zetaris queries
+[FAIL] no_cover_needed()
+  XX  ward_adequately_staffed: 3 of 4 required nurses available (after approved leave)
+[PASS] offer_shift_to_staff(staff_id=S001)  <planner> free that day, has required skill, home ward, 8h this week
+  ok  ward_actually_understaffed: 3 of 4 required nurses available (after approved leave)
+  ok  staff_not_on_leave: no approved leave on the shift date
+  ok  has_required_skill: holds cardiac_telemetry
+  ok  under_weekly_hour_cap: 8h rostered + 10h shift vs 38h cap
+  ok  no_conflicting_shift: no overlapping shift and rest gap respected
+FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001): Ward 4B night shift 2026-10-27.
+```
+
+**2. The same request on scenario B: Priya is refused with evidence, then agency**
+```
+Recalled   1 H-MEM memories
+           0.40  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (...)
+[FAIL] offer_shift_to_staff(staff_id=S001)  <memory> covered this shift pattern before (memory), ...
+  XX  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+         evidence {'staff_id': 'S001', 'leave_type': 'annual', 'start_date': '2026-10-26', 'end_date': '2026-10-30', 'status': 'approved'}
+[FAIL] offer_shift_to_staff(staff_id=S003)   XX under_weekly_hour_cap: 38h rostered + 10h shift vs 38h cap
+[FAIL] offer_shift_to_staff(staff_id=S002)   XX has_required_skill: missing required skill cardiac_telemetry
+[FAIL] offer_shift_to_staff(staff_id=S008)   XX no_conflicting_shift: rostered 3A day 2026-10-27 07:00:00 to 15:30:00 (< 10h rest)
+[PASS] escalate_to_agency()
+FIRED escalate_to_agency(): Agency request raised for 1 nurse: Ward 4B night shift 2026-10-27.
+  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite:
+  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+```
+
+**3. `"Ward 4B day shift tomorrow - do we need anyone?"`: nobody is contacted**
+```
+[PASS] no_cover_needed()
+  ok  ward_adequately_staffed: 5 of 5 required nurses available (after approved leave)
+FIRED no_cover_needed(): No cover needed: Ward 4B day shift 2026-10-27 is fully staffed. Nobody contacted.
+```
+
+**4. `"Ward 9Z needs cover tonight"`: no safe action, so it investigates instead**
+```
+[FAIL] escalate_to_agency()
+  XX  ward_actually_understaffed: no demand record for 9Z night 2026-10-26
+  XX  agency_allowed_for_ward: ward 9Z not found
+NO ACTION: no candidate passed every check. Escalated to the manager with evidence.
+Investigation (for the manager):
+No action passed its checks for Ward 9Z night shift 2026-10-26. Do not book anyone automatically. ...
+```
+
+A request without a ward, date or shift (for example `"someone called in sick"`) is rejected as
+`unparsed` and nothing is done.
+
+## How it works
+
+```
+request ─► parse (generator, validated; rule fallback)
+        ─► World Model ingest  ◄── 5 read-only SQL queries via Zetaris adapter (provenance per row)
+        ─► H-MEM recall        (action library + learned templates, 8-signal ranker)
+        ─► plan                (generator ranks staff; validated against library + staff pool)
+        ─► for each candidate: precondition gate ── SQL checks via Zetaris ── all pass? ─► fire, learn, stop
+                                                                            └─ any fail ─► log evidence, next
+        ─► nothing passed: generator writes an investigation for the manager; no action
+```
+
+| Path | What |
+|---|---|
+| `app/agent.py` | The loop above |
+| `app/actions/library.py` | Action specs and their fixed check lists |
+| `app/actions/executor.py` | Fires an action. Delivery is simulated: it writes to `logs/outbox.jsonl` |
+| `app/preconditions/checks.py` | 7 SQL checks; each returns evidence rows and a pass rule |
+| `app/preconditions/gate.py` | Runs every check of an action and fails closed on any data error |
+| `app/planner.py`, `app/request_parser.py` | Generator prompts, plus validation of their output |
+| `app/adapters/zetaris.py` | Zetaris REST source, DuckDB sample source, read-only SQL guard |
+| `app/adapters/llm.py` | The single `generator(prompt, system_prompt)`, with fallback |
+| `app/meterless/hmem.py`, `app/meterless/world_model.py` | Meterless engines (below) |
+| `app/audit.py` | JSONL logs |
+| `ui/streamlit_app.py` | Naive agent vs Preflight, with checks, evidence, memory and facts |
+
+### Safety design (where the reasoning becomes reliable)
+
+- **The gate is code, not the LLM.** The generator proposes and ranks candidates. Its output is
+  checked against the library and the staff pool, and anything invented (unknown staff, unknown
+  actions) is dropped. Only SQL evidence can let an action through.
+- **Fail closed.** If Zetaris times out or errors, the check counts as failed and the run ends
+  `unverifiable`. Live mode never falls back to the sample CSVs.
+- **Checks always query the source directly.** They never read the World Model's cached copy, which
+  could be out of date.
+- **Memory can't skip checks.** A recalled template that fails gets `not_helpful` feedback in the
+  H-MEM trust ledger.
+- **Read-only data access.** One statement per call, no semicolons, `SELECT`/`WITH`/`SHOW`/`DESCRIBE`
+  only, and parameters rendered as typed literals from validated values. This follows the Zetaris
+  `AGENTS.md` rules.
+- **Privacy.** Staff names never go to the LLM; prompts use IDs only. `LLM_BASE_URL` can point at a
+  local server that uses the same API, so prompts stay on the machine.
+
+## Sponsor technology, and where it is used
+
+### Zetaris (all facts and every check)
+`app/adapters/zetaris.py` → `ZetarisRestSource` calls the Zetaris direct REST API:
+`POST {ZETARIS_REST_URL}/sql-editor/sqls/run` with a bearer API key, `X-Org-ID` and a UUID
+`X-Request-ID`, as documented in [zetaris/getting-started](https://github.com/zetaris/getting-started).
+It is used by:
+- `app/preconditions/gate.py`: every precondition check (7 SQL queries in `checks.py`)
+- `app/meterless/world_model.py`: `IngestPipelineService` (5 scope queries)
+
+Every query result carries provenance (source, query name, query ID, rendered SQL, fetch time) into
+the World Model observations and into each check's evidence. In sample mode `DuckDBSampleSource` runs
+**the same rendered SQL text** over the CSVs.
+
+### Meterless engines (2 used)
+| Engine | Services implemented | Used where |
+|---|---|---|
+| **H-MEM** (`app/meterless/hmem.py`) | `Memory` record, `MemoryStoreService`, `MemoryRetrievalService` (8-signal hybrid ranker, top-N/threshold, trace), `TrustLedger`, `format_reinjection` | `agent.py`: seeds the action library, recalls before planning, injects into the planner prompt, saves fired actions as templates, adjusts confidence by feedback. `planner.py`: recalled staff are tried first |
+| **World Model** (`app/meterless/world_model.py`) | `WorldStoreService` (entities, edges, append-only observations), `IngestPipelineService` (extract → normalize → resolve → validate → append → project, stable hash IDs), `ContextBuilderService` (read surface, `build_prompt_context` → `{text, provenance}`) | `agent.py`: ingests the request's scope from Zetaris. The planner and investigation prompts read its context. The staff pool projection feeds candidate ranking |
+
+These follow `engines/hmem/HOW_TO_USE_H-MEM.md` and `engines/world-model/HOW_TO_USE_WORLD_MODEL.md`
+from [Meterless/Meterless](https://github.com/Meterless/Meterless), implemented in Python for this
+project. The World Model docs name the contracts `IngestPipeline` and `ReadSurface`. Here they are
+`IngestPipelineService` and `ContextBuilderService`. Not implemented: H-MEM mining, dreaming, sleep
+and conflict detection, and World Model enrichment and control plane.
+
+The **generator pattern** is in `app/adapters/llm.py`. It is the only place a model is called.
+Default provider: NVIDIA Nemotron via `https://integrate.api.nvidia.com/v1`, with the model from
+`NVIDIA_MODEL`.
+
+## Live mode (real Zetaris and LLM)
+
+1. `cp .env.example .env.local` (gitignored) and fill in:
+   - `SAMPLE_MODE=false`
+   - `ZETARIS_REST_URL` (local: `http://localhost:8888/api/v1.0`), `ZETARIS_ORG_ID` (numeric, from
+     Management → Organisation), `ZETARIS_API_KEY` (Management → API Tokens)
+   - `ZETARIS_TABLE_PREFIX`: the qualifier for the six tables (`staff`, `staff_skills`, `roster`,
+     `leave`, `demand`, `wards`) as Lightning SQL sees them
+   - `NVIDIA_API_KEY`, `NVIDIA_MODEL` (or `LLM_BASE_URL` for any server that uses the same API)
+2. Load the CSVs from `data/sample/<scenario>/` into Zetaris under that prefix, with the same
+   column names.
+3. Run `python -m app "Ward 4B needs night cover tomorrow"`.
+
+If the LLM is unreachable, each call falls back to the rule-based generator and an `llm_fallback`
+event is logged. If Zetaris is unreachable, nothing fires.
+
+## Logs
+
+| File | Content |
+|---|---|
+| `logs/trace.jsonl` | Every step of every run: request, parse, World Model ingest and provenance, memory recall trace, plan, each gate result with evidence, decision |
+| `logs/decisions.jsonl` | One line per run: the decision, what was refused and why (with evidence), and the naive agent's choice |
+| `logs/outbox.jsonl` | Actions that fired (simulated delivery) |
+| `logs/hmem_ledger.jsonl` | H-MEM trust ledger: every memory add, update and feedback |
+
+Learned memories persist in `state/hmem_memories.json` (gitignored).
+
+## Dependencies
+
+Python 3.12, `duckdb` (sample data source), `httpx` (Zetaris REST), `openai` (OpenAI-compatible
+client for NVIDIA), `python-dotenv`, `streamlit`, `pytest`. See `requirements.txt` / `pyproject.toml`.
+
+## Data
+
+All data in `data/sample/` is synthetic. See `data/sample/README.md`.
