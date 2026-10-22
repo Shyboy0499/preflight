@@ -1,0 +1,104 @@
+"""Candidate planning: which actions to try, in which order.
+
+The generator ranks internal staff using World Model context and recalled
+H-MEM memories. Its output is validated against the action library and the
+staff pool; anything else is dropped. The outer order is fixed policy:
+
+  1. no_cover_needed     (cheapest outcome; its check proves the shift is covered)
+  2. offers to staff     (memory-recalled first, then the generator's ranking)
+  3. escalate_to_agency  (costs money, so last)
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from app.actions.library import LIBRARY, describe_library
+from app.adapters.llm import Generator, extract_json
+from app.meterless.hmem import Memory
+from app.models import Candidate, ShiftRequest
+
+SYSTEM = """TASK: plan_candidates
+You are the planning step of a hospital shift-cover agent. Rank internal staff
+to offer an open shift to, best fit first. Prefer staff free that day, the
+required skill, the home ward, and fewer hours this week. Every candidate will be verified by SQL
+precondition checks before anything happens, so rank by fit; do not invent staff.
+Reply with only JSON:
+{"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "<id>"}, "reason": "<short>"}]}"""
+
+MAX_OFFERS = 4
+
+
+def remembered_staff(memories: list[Memory], request: ShiftRequest) -> list[str]:
+    """Staff IDs from recalled action templates that apply to this ward and shift."""
+    out = []
+    for m in memories:
+        a = m.action or {}
+        applies = a.get("applies_to", {})
+        if (
+            a.get("action") == "offer_shift_to_staff"
+            and applies.get("ward") == request.ward
+            and applies.get("shift_type") == request.shift_type
+            and a.get("params", {}).get("staff_id") not in out
+        ):
+            out.append(a["params"]["staff_id"])
+    return out
+
+
+def plan(
+    request: ShiftRequest,
+    generator: Generator,
+    world_context: str,
+    staff_pool: list[dict[str, Any]],
+    memories: list[Memory],
+    memory_context: str,
+) -> tuple[list[Candidate], dict[str, Any]]:
+    remembered = remembered_staff(memories, request)
+    payload = {
+        "ward": request.ward,
+        "shift": request.label(),
+        "max_offers": MAX_OFFERS,
+        "memory_staff_ids": remembered,
+        "staff_pool": [
+            {k: p[k] for k in ("staff_id", "home_ward", "skills", "week_hours", "weekly_hour_cap", "shifts_on_date", "already_on_this_shift", "has_required_skill")}
+            for p in staff_pool
+        ],
+    }
+    prompt = (
+        f"Action library:\n{describe_library()}\n\n"
+        f"Recalled memory:\n{memory_context or '(none)'}\n\n"
+        f"World model facts:\n{world_context}\n\n"
+        f"<input>{json.dumps(payload)}</input>"
+    )
+    raw = generator(prompt, SYSTEM)
+    known_staff = {p["staff_id"] for p in staff_pool if not p.get("already_on_this_shift")}
+    dropped: list[str] = []
+    offers: list[Candidate] = []
+    try:
+        proposed = extract_json(raw).get("candidates", [])
+    except (ValueError, AttributeError):
+        proposed, dropped = [], ["generator reply was not valid JSON"]
+
+    for item in proposed:
+        if not isinstance(item, dict):
+            continue
+        staff_id = str((item.get("params") or {}).get("staff_id", ""))
+        if item.get("action") != "offer_shift_to_staff" or staff_id not in known_staff:
+            dropped.append(f"{item.get('action')}({staff_id}) not in library/pool")
+            continue
+        origin = "memory" if staff_id in remembered else "planner"
+        c = Candidate("offer_shift_to_staff", {"staff_id": staff_id}, str(item.get("reason", ""))[:200], origin)
+        if c.key() not in {o.key() for o in offers}:
+            offers.append(c)
+
+    # Memory-recalled staff go first even if the generator ranked them lower.
+    offers.sort(key=lambda c: c.origin != "memory")
+    offers = offers[:MAX_OFFERS]
+    candidates = [
+        Candidate("no_cover_needed", {}, "check whether the shift is already covered", "default"),
+        *offers,
+        Candidate("escalate_to_agency", {}, "fallback when no internal staff pass", "default"),
+    ]
+    assert all(c.action in LIBRARY for c in candidates)
+    return candidates, {"raw_reply": raw[:2000], "dropped": dropped, "memory_staff_ids": remembered}

@@ -8,7 +8,7 @@ Jess Liu (S004) has called in sick for the night shift, so 4B nights drop to 3 o
 | Scenario | Only difference | Expected Preflight result for "Ward 4B needs night cover tomorrow" |
 |---|---|---|
 | `scenario_a` | — | Offer the shift to Priya Raman (S001): every check passes |
-| `scenario_b` | `leave.csv`: Priya has approved annual leave 26–30 Oct | Refuse Priya (on leave), Sam (hour cap), Raj (rest gap), Tom (skill); escalate to agency |
+| `scenario_b` | `leave.csv`: Priya has approved annual leave 26–30 Oct | Refuse Priya (on leave), Sam (hour cap), Tom (skill), Raj (rest gap after his 3A day shift); escalate to agency |
 
 The leave record lives only in the leave system (`leave.csv`), not in the roster, which is the trap a
 roster-only agent falls into.
