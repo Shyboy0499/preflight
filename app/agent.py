@@ -49,9 +49,11 @@ class RunResult:
     request_text: str
     request: ShiftRequest | None
     parse_path: str
-    decision: str  # fired | no_safe_action | unverifiable | unparsed
+    decision: str  # fired | partially_covered | no_safe_action | unverifiable | unparsed
     summary: str
-    fired: dict[str, Any] | None = None
+    fired: dict[str, Any] | None = None  # first action that fired
+    actions: list[dict[str, Any]] = field(default_factory=list)  # every action that fired, in order
+    shortfall_remaining: int | None = None  # nurses still missing after this run (None if unknown)
     attempts: list[GateResult] = field(default_factory=list)
     naive: dict[str, Any] | None = None
     investigation: str | None = None
@@ -70,6 +72,8 @@ class RunResult:
             "decision": self.decision,
             "summary": self.summary,
             "fired": self.fired,
+            "actions": self.actions,
+            "shortfall_remaining": self.shortfall_remaining,
             "attempts": [a.to_dict() for a in self.attempts],
             "naive": self.naive,
             "investigation": self.investigation,
@@ -197,21 +201,42 @@ class PreflightAgent:
         )
         naive_pick = next((c for c in candidates if c.action == "offer_shift_to_staff"), None)
 
+        # Fill the whole shortfall: each passing offer covers one nurse and is
+        # counted by ward_actually_understaffed on the next gate; the agency
+        # request (last) covers whatever is still missing.
+        pending = 0
         for candidate in candidates:
-            gate = evaluate(self.source, request, candidate)
+            gate = evaluate(self.source, request, candidate, pending_cover=pending)
             result.attempts.append(gate)
             audit.event("gate", **gate.to_dict())
+            if gate.shortfall is not None:
+                result.shortfall_remaining = gate.shortfall
             if not gate.passed:
                 if candidate.origin == "memory":
                     self._penalise_recalled(candidate, request, gate, recall.trace["trace_id"])
                 continue
             name = reader.display_name(candidate.params.get("staff_id", "")) if "staff_id" in candidate.params else ""
-            result.fired = fire(candidate, request, audit, name)
+            nurses = gate.shortfall if candidate.action == "escalate_to_agency" and gate.shortfall else 1
+            record = fire(candidate, request, audit, name, nurses=nurses)
+            result.actions.append(record)
+            result.fired = result.fired or record
             result.decision = "fired"
-            audit.event("action_fired", **result.fired)
-            result.learned_memory_id = self._learn(request, gate, run_id, recall.trace["trace_id"])
-            audit.event("memory_write", memory_id=result.learned_memory_id)
+            audit.event("action_fired", **record)
+            memory_id = self._learn(request, gate, run_id, recall.trace["trace_id"])
+            result.learned_memory_id = result.learned_memory_id or memory_id
+            audit.event("memory_write", memory_id=memory_id)
+            if candidate.action == "offer_shift_to_staff":
+                pending += 1
+                result.shortfall_remaining = max(0, (gate.shortfall or 1) - 1)
+                if result.shortfall_remaining:
+                    continue
+            elif candidate.action == "escalate_to_agency":
+                result.shortfall_remaining = 0
+            elif candidate.action == "no_cover_needed":
+                result.shortfall_remaining = 0
             break
+        if result.decision == "fired" and result.shortfall_remaining:
+            result.decision = "partially_covered"
 
         if naive_pick:
             naive_gate = next(a for a in result.attempts if a.candidate.key() == naive_pick.key()) if any(
@@ -224,9 +249,9 @@ class PreflightAgent:
             }
             audit.event("naive_shadow", **result.naive)
 
-        if result.decision != "fired":
+        if result.decision not in ("fired",):
             any_errors = any(r.status == "error" for a in result.attempts for r in a.results) or not report.complete
-            if any_errors and all(any(r.status == "error" for r in a.results) for a in result.attempts):
+            if not result.actions and any_errors and all(any(r.status == "error" for r in a.results) for a in result.attempts):
                 result.decision = "unverifiable"
             result.investigation = self._investigate(request, result, context["text"], any_errors)
             audit.event("investigation", text=result.investigation)
@@ -258,11 +283,14 @@ class PreflightAgent:
     def _summary(result: RunResult, reader: ContextBuilderService) -> str:
         refused = [a for a in result.attempts if not a.passed and a.candidate.action != "no_cover_needed"]
         lines = []
-        if result.decision == "fired":
-            lines.append(f"FIRED {result.attempts[-1].candidate.label()}: {result.fired['message']}")
+        for action in result.actions:
+            args = ", ".join(f"{k}={v}" for k, v in action["params"].items())
+            lines.append(f"FIRED {action['action']}({args}): {action['message']}")
+        if result.decision == "partially_covered":
+            lines.append(f"STILL SHORT by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager with evidence.")
         elif result.decision == "unverifiable":
             lines.append("NO ACTION: live data could not be verified, so nothing was booked.")
-        else:
+        elif result.decision == "no_safe_action":
             lines.append("NO ACTION: no candidate passed every check. Escalated to the manager with evidence.")
         for a in refused:
             who = a.candidate.label()
@@ -283,6 +311,8 @@ class PreflightAgent:
             "request": result.request.to_dict() if result.request else None,
             "decision": result.decision,
             "fired": result.fired,
+            "actions": result.actions,
+            "shortfall_remaining": result.shortfall_remaining,
             "refused": [
                 {"candidate": a.candidate.label(), "failed": [{"check": r.name, "why": r.explanation, "evidence": r.evidence} for r in a.failed]}
                 for a in result.attempts if not a.passed

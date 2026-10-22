@@ -13,7 +13,7 @@ from typing import Any
 from app.actions.library import LIBRARY
 from app.adapters.zetaris import DataSourceUnavailable, SqlSource, UnsafeQuery
 from app.models import MIN_REST, Candidate, ShiftRequest
-from app.preconditions.checks import ALL_CHECKS
+from app.preconditions.checks import ALL_CHECKS, shortfall
 
 
 @dataclass
@@ -33,6 +33,7 @@ class CheckResult:
 class GateResult:
     candidate: Candidate
     results: list[CheckResult]
+    shortfall: int | None = None  # nurses still missing when this gate ran (None if not measured)
 
     @property
     def passed(self) -> bool:
@@ -46,6 +47,7 @@ class GateResult:
         return {
             "candidate": self.candidate.to_dict(),
             "passed": self.passed,
+            "shortfall": self.shortfall,
             "checks": [
                 {
                     "name": r.name,
@@ -59,7 +61,7 @@ class GateResult:
         }
 
 
-def build_params(request: ShiftRequest, candidate: Candidate) -> dict[str, Any]:
+def build_params(request: ShiftRequest, candidate: Candidate, pending_cover: int = 0) -> dict[str, Any]:
     week_start = request.shift_date - timedelta(days=request.shift_date.weekday())
     return {
         "ward": request.ward,
@@ -72,11 +74,12 @@ def build_params(request: ShiftRequest, candidate: Candidate) -> dict[str, Any]:
         "rest_until": request.end + MIN_REST,
         "week_start": week_start,
         "week_end": week_start + timedelta(days=6),
+        "pending_cover": pending_cover,
         **candidate.params,
     }
 
 
-def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate) -> GateResult:
+def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate, pending_cover: int = 0) -> GateResult:
     spec = LIBRARY.get(candidate.action)
     if spec is None:
         return GateResult(candidate, [CheckResult("known_action", "fail", f"unknown action {candidate.action!r}")])
@@ -84,7 +87,7 @@ def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate) -> 
     if missing:
         return GateResult(candidate, [CheckResult("params_present", "fail", f"missing params: {', '.join(missing)}")])
 
-    params = build_params(request, candidate)
+    params = build_params(request, candidate, pending_cover)
     results: list[CheckResult] = []
     for name in spec.checks:
         check = ALL_CHECKS[name]
@@ -107,4 +110,8 @@ def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate) -> 
                 provenance=fetched.provenance(),
             )
         )
-    return GateResult(candidate, results)
+    gate = GateResult(candidate, results)
+    staffing = next((r for r in results if r.name == "ward_actually_understaffed" and r.status != "error"), None)
+    if staffing is not None:
+        gate.shortfall = max(0, shortfall(staffing.evidence, params))
+    return gate

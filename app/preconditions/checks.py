@@ -7,6 +7,7 @@ refusal can show the exact records that caused it.
 Parameters available to every check (built by app.preconditions.gate.build_params):
   :ward :shift_date :shift_type :staff_id :week_start :week_end
   :shift_start :shift_end :rest_from :rest_until :shift_hours
+and, for pass rules only, pending_cover (offers already fired in this run).
 """
 
 from __future__ import annotations
@@ -62,14 +63,24 @@ def _staffing_text(rows: Rows, p: dict[str, Any]) -> str:
     if not rows:
         return f"no demand record for {p['ward']} {p['shift_type']} {p['shift_date']}"
     r = rows[0]
-    return f"{r['available_rostered']} of {r['required_nurses']} required nurses available (after approved leave)"
+    pending = int(p.get("pending_cover", 0))
+    extra = f" + {pending} offered in this run" if pending else ""
+    return f"{r['available_rostered']}{extra} of {r['required_nurses']} required nurses available (after approved leave)"
+
+
+def shortfall(rows: Rows, p: dict[str, Any]) -> int:
+    """Nurses still missing: demand minus rostered (not on leave) minus offers made in this run."""
+    if not rows:
+        return 0
+    r = rows[0]
+    return int(r["required_nurses"]) - int(r["available_rostered"]) - int(p.get("pending_cover", 0))
 
 
 WARD_UNDERSTAFFED = Check(
     "ward_actually_understaffed",
     "Rostered nurses not on leave are fewer than demand requires",
     STAFFING,
-    passes=lambda rows, p: bool(rows) and int(rows[0]["available_rostered"]) < int(rows[0]["required_nurses"]),
+    passes=lambda rows, p: bool(rows) and shortfall(rows, p) > 0,
     explain=_staffing_text,
 )
 

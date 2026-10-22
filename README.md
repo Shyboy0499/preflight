@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 59 tests
+pytest                                                                                       # 63 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -109,6 +109,18 @@ NO ACTION: no candidate passed every check. Escalated to the manager with eviden
 Investigation (for the manager):
 No action passed its checks for Ward 9Z night shift 2026-10-26. Do not book anyone automatically. ...
 ```
+
+**5. `"Ward 4B needs evening cover tomorrow"`: 0 of 4 rostered, so the whole gap gets covered**
+```
+FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001): Ward 4B evening shift 2026-10-27.
+FIRED escalate_to_agency(): Agency request raised for 3 nurses: Ward 4B evening shift 2026-10-27.
+  refused offer_shift_to_staff(staff_id=S003) [Sam Okafor]: under_weekly_hour_cap (38h rostered + 8h shift vs 38h cap)
+  ...
+```
+Each offer that fires counts toward the next `ward_actually_understaffed` check
+("0 + 1 offered in this run of 4"), so Preflight keeps offering until the gap is closed. The agency
+is asked only for the nurses still missing. If nothing else passes, for example when ward policy
+forbids agency staff, the run ends `partially_covered` and reports how many nurses are still missing.
 
 A request without a ward, date or shift (for example `"someone called in sick"`) is rejected as
 `unparsed` and nothing is done.

@@ -82,8 +82,11 @@ if result:
             st.info("Would not book anyone.")
     with preflight_col:
         st.subheader("Preflight")
-        if result.decision == "fired":
-            st.success(result.fired["message"])
+        if result.actions:
+            for action in result.actions:
+                st.success(action["message"])
+            if result.decision == "partially_covered":
+                st.warning(f"Still short by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager.")
         elif result.decision == "unverifiable":
             st.error("No action: live data could not be verified.")
         else:

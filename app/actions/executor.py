@@ -13,17 +13,18 @@ from app.audit import AuditLog
 from app.models import Candidate, ShiftRequest
 
 
-def fire(candidate: Candidate, request: ShiftRequest, audit: AuditLog, display_name: str = "") -> dict[str, Any]:
+def fire(candidate: Candidate, request: ShiftRequest, audit: AuditLog, display_name: str = "", nurses: int = 1) -> dict[str, Any]:
     if candidate.action == "offer_shift_to_staff":
         who = f"{display_name} ({candidate.params['staff_id']})" if display_name else candidate.params["staff_id"]
         message = f"Shift offer sent to {who}: {request.label()}."
     elif candidate.action == "escalate_to_agency":
-        message = f"Agency request raised for 1 nurse: {request.label()}."
+        message = f"Agency request raised for {nurses} nurse{'s' if nurses != 1 else ''}: {request.label()}."
     else:
         message = f"No cover needed: {request.label()} is fully staffed. Nobody contacted."
     record = {
         "action": candidate.action,
         "params": candidate.params,
+        "nurses": nurses if candidate.action != "no_cover_needed" else 0,
         "request": request.to_dict(),
         "message": message,
         "delivery": "simulated",

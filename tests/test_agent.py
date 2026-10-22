@@ -187,3 +187,39 @@ def test_recalled_staff_are_gated_even_when_the_generator_skips_them(make_agent)
     assert [r.name for r in first_offer.failed] == ["staff_not_on_leave"]
     assert result.naive["would_fire"] == "offer_shift_to_staff(staff_id=S001)" and result.naive["unsafe"]
     assert result.fired["action"] == "escalate_to_agency"
+
+
+EVENING = "Ward 4B needs evening cover tomorrow"
+
+
+def test_multi_nurse_shortfall_is_filled_by_offers_then_agency_for_the_rest(make_agent):
+    result = make_agent("scenario_a").run(EVENING)
+    assert result.decision == "fired"
+    assert [(a["action"], a["params"], a["nurses"]) for a in result.actions] == [
+        ("offer_shift_to_staff", {"staff_id": "S001"}, 1),
+        ("escalate_to_agency", {}, 3),
+    ]
+    assert result.shortfall_remaining == 0
+    agency_gate = next(a for a in result.attempts if a.candidate.action == "escalate_to_agency")
+    staffing = next(r for r in agency_gate.results if r.name == "ward_actually_understaffed")
+    assert "+ 1 offered in this run" in staffing.explanation
+
+
+def test_single_gap_stops_after_one_offer(make_agent):
+    result = make_agent("scenario_a").run(NIGHT)
+    assert [a["action"] for a in result.actions] == ["offer_shift_to_staff"]
+    assert result.shortfall_remaining == 0
+
+
+def test_shortfall_left_uncovered_is_reported_not_hidden(make_agent, tmp_path):
+    import shutil
+
+    data = tmp_path / "no_agency"
+    shutil.copytree(DATA / "scenario_a", data)
+    (data / "wards.csv").write_text("ward,ward_name,agency_allowed\n4B,Cardiology,false\n")
+    result = make_agent(source=DuckDBSampleSource(data)).run(EVENING)
+    assert result.decision == "partially_covered"
+    assert [a["action"] for a in result.actions] == ["offer_shift_to_staff"]
+    assert result.shortfall_remaining == 3
+    assert "STILL SHORT by 3" in result.summary
+    assert result.investigation
