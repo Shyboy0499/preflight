@@ -1,6 +1,6 @@
 # Preflight: status handoff
 
-Updated 2026-10-23 (after review round 1) by the Claude Code session building the repo. Rewritten and
+Updated 2026-10-24 (review round 2, in progress) by the Claude Code session building the repo. Rewritten and
 pushed after each milestone. No secrets here: `.env.local` holds them and is gitignored.
 Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03: Reasoning Architecture**.
 
@@ -27,15 +27,21 @@ Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03
 | **Review round 1:** pending leave becomes a warning (never blocks); re-check trims an over-sized agency request | `edf00b3` |
 | **Review round 1:** UI "Preflight prepares, manager sends" (Send / Discard, simulated); fixed "No action" shown next to "Already covered" | `6e42642` |
 | **Review round 1:** judge quick start, Mermaid architecture, `docs/live-run-2026-10-23.md`, `scripts/demo_reset.sh`, split scoreboard, track and Cursor facts | `29414eb` |
+| **Round 2:** four named roles (Planner, Verifier, Investigator, Memory) in `app/agents.py`; `role` on every trace event; Verifier refusals go back to the Planner for one re-plan before backfill and agency | `8e87c4d` |
+| **Round 2:** Meterless Nightshift as the primary AI provider (runtime contract: bearer token, `meterless-app` header, `meterless/auto`, 180 s, `/v1/models` status); NVIDIA direct only as a fallback; `--provider-status` | `18e265c` |
 
 ## 2. Current state
 
-- **Tests:** `pytest` → `76 passed, 1 warning in 4.78s` (2026-10-23, local).
+- **Tests:** `pytest` → `96 passed, 1 warning` (2026-10-24, local).
 - **Judge quick start** (README, 3 commands): cloned from GitHub into a clean environment, it ran in
   **50 s** and printed the expected A → withdraw → agency output.
 - **Sample mode** (DuckDB + rule-based generator) runs end to end and needs no credentials.
 - **Live mode** was run against local Zetaris 2.4.3 + NVIDIA `nemotron-3.5-lightning-30b-a3b`, with
   three sources: `PREFLIGHT_FILES` (CSV), `preflight_pg` (Postgres leave), `PREFLIGHT_API` (REST skills).
+- **Nightshift is not yet proven live.** It isn't installed on this machine; `--provider-status`
+  reports OFFLINE. The code and tests follow the published contract. Waiting on the user to install
+  Nightshift, add the NVIDIA key inside it, and put the runtime token in `.env.local`.
+- **The 2026-10-23 live run used NVIDIA direct**, before the Nightshift provider existed. The README says so.
 - **Not yet run live:**
   - this round's UI Send/Discard (tested in sample mode and pytest only);
   - the pending-leave warning and the agency trim (unit-tested only);
@@ -60,12 +66,12 @@ Every action is re-checked by `evals/oracle.py`, which shares no code with the S
 | | Preflight | Naive (top pick, no checks) |
 |---|---|---|
 | Actions | 2434 | 1200 |
-| **People-safety violations** (leave, skill, hours, rest) | **0** | **278 (23.2%)** |
+| **People-safety violations** (leave, skill, hours, rest) | **0** | **279 (23.2%)** |
 | Unnecessary bookings only | 0 | 89 (7.4%) |
-| Any rule broken | 0 | 367 (30.6%) |
+| Any rule broken | 0 | 368 (30.7%) |
 
-Correction to the review's 247/120 split: 31 naive bookings were both unnecessary and unsafe, so
-they count under people-safety (278 + 89 = 367).
+The naive baseline is now exactly "the Planner's round-1 top pick", which moved it from 278 to 279.
+31 naive bookings were both unnecessary and unsafe, so they count under people-safety (279 + 89 = 368).
 
 ## 5. Decisions and trade-offs
 
@@ -78,6 +84,11 @@ they count under people-safety (278 + 89 = 367).
   new and discarding frees the shift. The CLI and the eval send automatically.
 - **Advisory checks:** a failure gives `warn`, which passes and shows the warning. An advisory that
   can't be verified errors, and the action is blocked (fail closed).
+- **Roles:** the Planner and Investigator are the LLM; the Verifier is SQL over Zetaris; Memory is
+  H-MEM. The re-plan runs once per request, only when round 1 leaves a gap. The rule-based Planner's
+  re-plan skips staff whose facts match the refusal reasons (a heuristic; the Verifier still checks).
+- **Provider:** Nightshift first, then NVIDIA direct, then rules. The NVIDIA key belongs in
+  Nightshift. A token set together with an NVIDIA base URL is a config error.
 - **Model:** `lightning`, with reasoning off. `super`/`nano` returned 404 on this account; `ultra` was slower.
 - **Staff names never go to the LLM.** No third-party code was copied (`PRE_EXISTING.md`).
 - **Built with Claude Code; Cursor not used** (now optional per the organisers).
@@ -103,10 +114,16 @@ they count under people-safety (278 + 89 = 367).
 
 ## 8. Next
 
-- The reviewing Claude chat handles the demo, deck, submission text and UI polish from GitHub. The
-  live demo needs the user's machine:
-  - Docker with Zetaris, and `.env.local`;
-  - the skills service: `uvicorn services.skills_api:app --host 127.0.0.1 --port 8077`;
-  - order: `scripts/demo_reset.sh` → A → `demo_toggle_leave.py on` → B → B again → UI.
-- This session: apply review feedback and update and push this file after each milestone.
-- Optional: run the eval with `--llm` on a small N; run the new UI Send step once against live Zetaris.
+- **Blocked on the user:**
+  - install Meterless Nightshift (Mac M1+ edition; this Mac has an M5);
+  - add the NVIDIA key inside Nightshift;
+  - set `METERLESS_RUNTIME_TOKEN` in `.env.local`;
+  - optionally put the HackOS Participant Setup Guide PDF in a gitignored folder.
+
+  Then: `--provider-status` reports ONLINE, plus a live A/B run through Nightshift.
+- **Demo video (AI-generated, round 2 item 3)** needs:
+  - an installed Enhanced/Premium English voice;
+  - Playwright (dev-only);
+  - a one-time Zetaris UI login saved as Playwright storage state, done by the user so no password
+    is typed on camera.
+- Keep this file updated and pushed after each milestone.
