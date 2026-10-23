@@ -1,6 +1,6 @@
 # Preflight: status handoff
 
-Updated 2026-10-23 (round 2: roles, Nightshift client, demo video) by the Claude Code session building the repo. Rewritten and
+Updated 2026-10-24: **BUILD COMPLETE** (round 2: roles, Nightshift client, demo video v2). Written by the Claude Code session building the repo. Rewritten and
 pushed after each milestone. No secrets here: `.env.local` holds them and is gitignored.
 Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03: Reasoning Architecture**.
 
@@ -34,7 +34,7 @@ Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03
 
 ## 2. Current state
 
-- **Tests:** `pytest` → `97 passed, 1 warning` (2026-10-23, local).
+- **Tests:** `pytest` → `97 passed, 1 warning` (2026-10-24, local, final check).
 - **Judge quick start** (README, 3 commands): cloned from GitHub into a clean environment, it ran in
   **50 s** and printed the expected A → withdraw → agency output.
 - **Sample mode** (DuckDB + rule-based generator) runs end to end and needs no credentials.
@@ -114,7 +114,22 @@ The naive baseline is now exactly "the Planner's round-1 top pick", which moved 
 2. Is the 50 s quick start acceptable, or should the README also offer a `uv` variant (~10 s install)?
 3. Should the deck lead with the people-safety number (0 vs 23.2%) or "any rule broken" (0 vs 30.6%)?
 
-## 8. Next
+## 8. Build status: complete
+
+- All work is committed and pushed to `origin/main`. Nothing is uncommitted.
+- Background processes from the build session are stopped: Streamlit, the skills service (uvicorn),
+  Playwright and the test browser, video builds.
+- Left running on purpose (needed for any live demo): Docker Desktop with the Zetaris stack and the
+  `preflight-postgres` leave container.
+  - Before a live demo: start the skills service
+    (`uvicorn services.skills_api:app --host 127.0.0.1 --port 8077`) and run `scripts/demo_reset.sh`.
+  - Stop the containers when no longer needed: `docker stop preflight-postgres`, then
+    `docker compose down` in the Zetaris folder.
+- Submission assets: `demo/preflight-demo.mp4` (3:10, local and gitignored; upload it), README,
+  `metadata.json`, `docs/live-run-2026-10-23.md`, `evals/results/latest.md`.
+- Still optional: prove Meterless Nightshift live (install it, set `METERLESS_RUNTIME_TOKEN`).
+
+## 9. Notes from the last milestone
 
 - **Demo video v2 done: `demo/preflight-demo.mp4`** (gitignored; upload it with the submission). 3:10,
   1080p30, 15 scenes in Demo Video Guide order. Narration: `demo/script.md`.
