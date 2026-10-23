@@ -14,7 +14,8 @@ from app.audit import AuditLog
 from app.models import Candidate, ShiftRequest
 
 
-def fire(candidate: Candidate, request: ShiftRequest, audit: AuditLog, display_name: str = "", nurses: int = 1) -> dict[str, Any]:
+def fire(candidate: Candidate, request: ShiftRequest, audit: AuditLog, display_name: str = "", nurses: int = 1,
+         warnings: list[str] | None = None) -> dict[str, Any]:
     if candidate.action == "offer_shift_to_staff":
         who = f"{display_name} ({candidate.params['staff_id']})" if display_name else candidate.params["staff_id"]
         message = f"Shift offer sent to {who}: {request.label()}."
@@ -29,6 +30,7 @@ def fire(candidate: Candidate, request: ShiftRequest, audit: AuditLog, display_n
         "nurses": nurses if candidate.action != "no_cover_needed" else 0,
         "request": request.to_dict(),
         "message": message,
+        "warnings": list(warnings or []),
         "delivery": "simulated",
     }
     audit.outbox(record)
@@ -65,9 +67,29 @@ def open_actions(outbox_path, request: ShiftRequest) -> list[dict[str, Any]]:
         return []
     records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     withdrawn = {r.get("ref") for r in records if r.get("action") == "withdraw"}
+    amended = {r["ref"]: r["nurses"] for r in records if r.get("action") == "amend"}  # latest wins
     return [
-        r for r in records
+        {**r, "nurses": amended.get(r["action_id"], r.get("nurses"))}
+        for r in records
         if r.get("action") in ("offer_shift_to_staff", "escalate_to_agency")
         and r.get("request") == request.to_dict()
         and r.get("action_id") and r["action_id"] not in withdrawn
     ]
+
+
+def amend_agency(record: dict[str, Any], nurses: int, reason: str, audit: AuditLog) -> dict[str, Any]:
+    """Reduce an open agency request that now asks for more nurses than are missing."""
+    out = {
+        "action_id": f"act_{uuid.uuid4().hex[:10]}",
+        "action": "amend",
+        "ref": record["action_id"],
+        "amended_action": record["action"],
+        "params": record["params"],
+        "request": record["request"],
+        "nurses": nurses,
+        "reason": reason,
+        "message": f"Agency request reduced from {record.get('nurses')} to {nurses} nurse{'s' if nurses != 1 else ''}: {reason}.",
+        "delivery": "simulated",
+    }
+    audit.outbox(out)
+    return out

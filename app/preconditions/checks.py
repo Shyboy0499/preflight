@@ -27,6 +27,7 @@ class Check:
     query: Query
     passes: Callable[[Rows, dict[str, Any]], bool]
     explain: Callable[[Rows, dict[str, Any]], str]
+    advisory: bool = False  # True: a failure is a warning shown to the manager, never a block
 
 
 def _truthy(value: Any) -> bool:
@@ -205,6 +206,29 @@ AGENCY_ALLOWED = Check(
     ),
 )
 
+PENDING_LEAVE_ADVISORY = Check(
+    "no_pending_leave_request",
+    "Advisory: no leave request still awaiting approval overlaps the shift",
+    Query(
+        "pending_leave_overlapping_shift",
+        """
+        SELECT lv.staff_id AS staff_id, lv.leave_type AS leave_type, lv.start_date AS start_date,
+               lv.end_date AS end_date, lv.status AS status
+        FROM {leave} lv
+        WHERE lv.staff_id = :staff_id AND lv.status = 'pending'
+          AND lv.start_date <= :shift_date AND lv.end_date >= :shift_date
+        """,
+        ("staff_id", "leave_type", "start_date", "end_date", "status"),
+    ),
+    passes=lambda rows, p: not rows,
+    explain=lambda rows, p: (
+        "no pending leave request on the shift date"
+        if not rows
+        else f"WARNING: has a pending {rows[0]['leave_type']} leave request {rows[0]['start_date']} to {rows[0]['end_date']} (not approved, so not blocking)"
+    ),
+    advisory=True,
+)
+
 ALL_CHECKS = {
     c.name: c
     for c in (
@@ -215,5 +239,6 @@ ALL_CHECKS = {
         UNDER_WEEKLY_HOUR_CAP,
         NO_CONFLICTING_SHIFT,
         AGENCY_ALLOWED,
+        PENDING_LEAVE_ADVISORY,
     )
 }

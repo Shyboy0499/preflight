@@ -101,7 +101,7 @@ def test_memory_is_learned_recalled_and_penalised_but_never_skips_checks(make_ag
     assert learned in [m["id"] for m in second.memory_trace["returned"]]
     priya = next(a for a in second.attempts if a.candidate.params.get("staff_id") == "S001")
     assert priya.candidate.origin == "memory"
-    assert len(priya.results) == 5 and not priya.passed  # all checks still ran
+    assert len(priya.results) == 6 and not priya.passed  # all checks still ran (5 + pending-leave advisory)
 
     ledger = read_jsonl(tmp_path / "logs_b" / "hmem_ledger.jsonl")
     feedback = [e for e in ledger if e["memory_id"] == learned and e["action"] == "feedback"]
@@ -287,3 +287,36 @@ def test_hmem_memory_changes_what_the_agent_does(make_agent):
     assert without.fired["params"] == with_memory.fired["params"] == {"staff_id": "S001"}
     assert any(m["content"].startswith("Ward 4B night cover") for m in with_memory.memory_trace["returned"])
     assert without.memory_trace["returned"] == []
+
+
+
+def test_pending_leave_warns_but_does_not_block(make_agent, tmp_path):
+    import shutil
+
+    data = tmp_path / "pending"
+    shutil.copytree(DATA / "scenario_a", data)
+    with (data / "leave.csv").open("a") as f:
+        f.write("S001,annual,2026-10-27,2026-10-29,pending\n")
+    result = make_agent(source=DuckDBSampleSource(data)).run(NIGHT)
+    assert result.fired["params"] == {"staff_id": "S001"}  # not blocked
+    assert result.fired["warnings"] == [
+        "WARNING: has a pending annual leave request 2026-10-27 to 2026-10-29 (not approved, so not blocking)"
+    ]
+    assert "WARNING: has a pending annual leave request" in result.summary
+
+
+def test_recheck_trims_an_oversized_agency_request(make_agent, tmp_path):
+    import shutil
+
+    data = tmp_path / "trim"
+    shutil.copytree(DATA / "scenario_a", data)
+    first = make_agent(source=DuckDBSampleSource(data)).run("Ward 4B needs evening cover tomorrow")
+    assert [a["nurses"] for a in first.actions] == [1, 3]  # Priya + agency for 3
+    with (data / "roster.csv").open("a") as f:  # a nurse gets rostered onto the evening shift directly
+        f.write("R2000,S007,4B,2026-10-27,evening,2026-10-27 15:00:00,2026-10-27 23:30:00,8\n")
+    again = make_agent(source=DuckDBSampleSource(data)).run("Ward 4B needs evening cover tomorrow")
+    (amend,) = [a for a in again.actions if a["action"] == "amend"]
+    assert amend["nurses"] == 2 and "reduced from 3 to 2" in amend["message"]
+    assert again.decision == "already_covered"
+    third = make_agent(source=DuckDBSampleSource(data)).run("Ward 4B needs evening cover tomorrow")
+    assert third.decision == "already_covered" and not third.actions  # amendment persisted, nothing re-amended

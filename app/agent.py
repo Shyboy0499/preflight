@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.actions.executor import fire, open_actions, withdraw
+from app.actions.executor import amend_agency, fire, open_actions, withdraw
 from app.actions.library import LIBRARY
 from app.adapters.llm import Generator, make_generator
 from app.adapters.zetaris import DataSourceUnavailable, SqlSource, make_source
@@ -215,6 +215,12 @@ class PreflightAgent:
             rechecked_staff.add(record["params"].get("staff_id"))
             if gate.passed:
                 nurses = int(record.get("nurses") or 1)
+                if record["action"] == "escalate_to_agency" and gate.shortfall is not None and nurses > gate.shortfall:
+                    reason = f"only {gate.shortfall} still missing"
+                    out = amend_agency(record, gate.shortfall, reason, audit)
+                    audit.event("action_amended", **out)
+                    result.actions.append(out)
+                    nurses = gate.shortfall
                 pending += nurses
                 remaining = max(0, (gate.shortfall or 0) - nurses)
                 result.rechecks.append({"record": record, "status": "kept", "gate": gate})
@@ -257,7 +263,7 @@ class PreflightAgent:
                 continue
             name = reader.display_name(candidate.params.get("staff_id", "")) if "staff_id" in candidate.params else ""
             nurses = gate.shortfall if candidate.action == "escalate_to_agency" and gate.shortfall else 1
-            record = fire(candidate, request, audit, name, nurses=nurses)
+            record = fire(candidate, request, audit, name, nurses=nurses, warnings=[w.explanation for w in gate.warnings])
             result.actions.append(record)
             result.fired = result.fired or record
             result.decision = "fired"
@@ -333,9 +339,10 @@ class PreflightAgent:
                 lines.append(f"STILL OPEN {r['record']['action']} ({r['record']['action_id']}): re-checked, every check passes")
         for action in result.actions:
             args = ", ".join(f"{k}={v}" for k, v in action["params"].items())
-            verb = "WITHDRAWN" if action["action"] == "withdraw" else "FIRED"
-            name = action.get("withdrawn_action", action["action"])
+            verb = {"withdraw": "WITHDRAWN", "amend": "AMENDED"}.get(action["action"], "FIRED")
+            name = action.get("withdrawn_action") or action.get("amended_action") or action["action"]
             lines.append(f"{verb} {name}({args}): {action['message']}")
+            lines += [f"  {w}" for w in action.get("warnings", [])]
         if result.decision == "already_covered":
             lines.append("ALREADY COVERED by the open actions above. Nothing new sent.")
         if result.decision == "partially_covered":

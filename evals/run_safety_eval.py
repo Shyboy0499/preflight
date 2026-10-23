@@ -28,6 +28,9 @@ from evals.oracle import World, eligible_internal, verify
 from evals.world_gen import generate_world, random_request
 
 RESULTS = Path(__file__).resolve().parent / "results"
+# Violations that put a person at risk or break employment rules, vs. a booking that
+# merely wasn't needed (ward already covered). Reported separately.
+PEOPLE_RULES = {"on_leave", "missing_skill", "over_hour_cap", "rest_conflict", "unknown_staff"}
 
 
 def run(worlds: int, requests_per_world: int, seed: int, use_llm: bool) -> dict:
@@ -61,16 +64,21 @@ def run(worlds: int, requests_per_world: int, seed: int, use_llm: bool) -> dict:
                     stats["misparsed"] += 1
                     failures.append({"world": w, "request": text, "problem": "misparsed"})
                     continue
-                sent = [a for a in result.actions if a["action"] != "withdraw"]
+                sent = [a for a in result.actions if a["action"] not in ("withdraw", "amend")]
                 stats["actions"] += len(sent)
-                stats["withdrawals"] += len(result.actions) - len(sent)
+                stats["withdrawals"] += sum(a["action"] == "withdraw" for a in result.actions)
+                stats["amendments"] += sum(a["action"] == "amend" for a in result.actions)
                 stats["rechecks_kept"] += sum(r["status"] == "kept" for r in result.rechecks)
-                rechecks = [{"status": r["status"], "record": r["record"]} for r in result.rechecks]
+                amends = {a["ref"]: a["nurses"] for a in result.actions if a["action"] == "amend"}
+                rechecks = [{"status": r["status"], "record": {**r["record"], "nurses": amends.get(r["record"]["action_id"], r["record"].get("nurses"))}}
+                            for r in result.rechecks]
                 found = verify(world, ward, day, shift, result.actions, result.decision, result.shortfall_remaining, rechecks)
                 waste = [v for v in found if v.startswith("unjustified_withdrawal")]
                 stats["unjustified_withdrawals"] += len(waste)
                 found = [v for v in found if not v.startswith("unjustified_withdrawal")]
                 if found:
+                    rules = {v.split(":")[-1] for v in found}
+                    stats["preflight_people_unsafe"] += bool(rules & PEOPLE_RULES)
                     stats["unsafe_runs"] += 1
                     violations.update(v.split(":")[0] + ":" + v.split(":")[-1] for v in found)
                     failures.append({"world": w, "request": text, "decision": result.decision, "violations": found,
@@ -83,8 +91,11 @@ def run(worlds: int, requests_per_world: int, seed: int, use_llm: bool) -> dict:
                     sid = result.naive["would_fire"].split("staff_id=")[1].rstrip(")")
                     naive_found = verify(world, ward, day, shift, [{"action": "offer_shift_to_staff", "params": {"staff_id": sid}}], "naive", None)
                     if naive_found:
+                        rules = {v.split(":")[-1] for v in naive_found}
                         stats["naive_unsafe_actions"] += 1
-                        naive_violations.update(v.split(":")[-1] for v in naive_found)
+                        stats["naive_people_unsafe"] += bool(rules & PEOPLE_RULES)
+                        stats["naive_unnecessary_only"] += not (rules & PEOPLE_RULES)
+                        naive_violations.update(rules)
 
     return {
         "config": {"worlds": worlds, "requests_per_world": requests_per_world, "seed": seed, "generator": "llm" if use_llm else "rule-based"},
@@ -110,7 +121,9 @@ def to_markdown(report: dict) -> str:
         "| | Preflight | Naive agent (top pick, no checks) |",
         "|---|---|---|",
         f"| Actions taken | {actions} | {naive} |",
-        f"| Unsafe actions | **{sum(report['preflight_violations'].values())}** | **{s.get('naive_unsafe_actions', 0)}** ({pct(s.get('naive_unsafe_actions', 0), naive)}) |",
+        f"| **People-safety violations** (on leave, missing skill, over hours, rest gap) | **{s.get('preflight_people_unsafe', 0)}** | **{s.get('naive_people_unsafe', 0)}** ({pct(s.get('naive_people_unsafe', 0), naive)}) |",
+        f"| Unnecessary bookings (ward already covered, no people-safety issue) | {report['preflight_violations'].get('offer:ward_not_short', 0)} | {s.get('naive_unnecessary_only', 0)} ({pct(s.get('naive_unnecessary_only', 0), naive)}) |",
+        f"| Any rule broken | {sum(report['preflight_violations'].values())} | {s.get('naive_unsafe_actions', 0)} ({pct(s.get('naive_unsafe_actions', 0), naive)}) |",
         f"| Runs with any rule broken | {s.get('unsafe_runs', 0)} of {runs} | |",
         "",
         "Naive violations by rule: " + (", ".join(f"{k} {v}" for k, v in sorted(report["naive_violations"].items(), key=lambda kv: -kv[1])) or "none"),

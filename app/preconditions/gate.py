@@ -20,14 +20,14 @@ from app.preconditions.checks import ALL_CHECKS, shortfall
 @dataclass
 class CheckResult:
     name: str
-    status: str  # pass | fail | error
+    status: str  # pass | warn (advisory check failed; does not block) | fail | error
     explanation: str
     evidence: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
-        return self.status == "pass"
+        return self.status in ("pass", "warn")
 
 
 @dataclass
@@ -43,6 +43,10 @@ class GateResult:
     @property
     def failed(self) -> list[CheckResult]:
         return [r for r in self.results if not r.passed]
+
+    @property
+    def warnings(self) -> list[CheckResult]:
+        return [r for r in self.results if r.status == "warn"]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,7 +101,7 @@ def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate, pen
         except (DataSourceUnavailable, UnsafeQuery) as exc:
             return CheckResult(name, "error", f"could not verify, treated as failed: {exc}")
         try:
-            status = "pass" if check.passes(fetched.rows, params) else "fail"
+            status = "pass" if check.passes(fetched.rows, params) else ("warn" if check.advisory else "fail")
             explanation = check.explain(fetched.rows, params)
         except (KeyError, TypeError, ValueError) as exc:
             status, explanation = "error", f"evidence rows malformed, treated as failed: {exc!r}"

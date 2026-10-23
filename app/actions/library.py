@@ -39,6 +39,7 @@ LIBRARY: dict[str, ActionSpec] = {
                 "has_required_skill",
                 "under_weekly_hour_cap",
                 "no_conflicting_shift",
+                "no_pending_leave_request",  # advisory: warns, never blocks
             ),
         ),
         ActionSpec(

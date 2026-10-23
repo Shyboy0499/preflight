@@ -33,7 +33,7 @@ def statuses(result):
 def test_offer_to_priya_fires_when_she_is_available(src_a):
     result = evaluate(src_a, NIGHT, offer("S001"))
     assert result.passed, statuses(result)
-    assert len(result.results) == 5
+    assert len(result.results) == 6 and not result.warnings
 
 
 def test_offer_to_priya_refused_with_leave_evidence_when_on_leave(src_b):
@@ -102,7 +102,7 @@ def test_unknown_action_and_missing_params_never_pass(src_a):
 def test_injection_through_params_is_refused(src_a):
     result = evaluate(src_a, NIGHT, offer("S001' OR '1'='1"))
     assert not result.passed
-    staff_checks = {"staff_not_on_leave", "has_required_skill", "under_weekly_hour_cap", "no_conflicting_shift"}
+    staff_checks = {"staff_not_on_leave", "has_required_skill", "under_weekly_hour_cap", "no_conflicting_shift", "no_pending_leave_request"}
     assert {r.name for r in result.results if r.status == "error"} == staff_checks
 
 

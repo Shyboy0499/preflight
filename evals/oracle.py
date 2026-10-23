@@ -129,7 +129,7 @@ def verify(world: World, ward: str, day: str, shift: str, actions: list[dict], d
                 violations.append(f"unjustified_withdrawal:{r['record']['action']}")
 
     for a in actions:
-        if a["action"] != "withdraw":
+        if a["action"] not in ("withdraw", "amend"):
             violations += check(a)
 
     if decision in ("fired", "already_covered") and short():
