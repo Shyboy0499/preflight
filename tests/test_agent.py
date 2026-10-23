@@ -320,3 +320,26 @@ def test_recheck_trims_an_oversized_agency_request(make_agent, tmp_path):
     assert again.decision == "already_covered"
     third = make_agent(source=DuckDBSampleSource(data)).run("Ward 4B needs evening cover tomorrow")
     assert third.decision == "already_covered" and not third.actions  # amendment persisted, nothing re-amended
+
+
+def test_ui_mode_prepares_actions_for_the_manager(make_agent, tmp_path):
+    from app.actions.executor import delivery_states, manager_decision
+
+    agent = make_agent(auto_send=False)
+    result = agent.run(NIGHT)
+    assert result.fired["delivery"] == "awaiting_manager"
+    outbox = tmp_path / "logs" / "outbox.jsonl"
+    assert delivery_states(outbox) == {}
+    manager_decision(outbox, result.fired["action_id"], "send", result.fired["message"])
+    assert delivery_states(outbox) == {result.fired["action_id"]: "sent"}
+    # a prepared (or sent) offer reserves cover: repeating the request prepares nothing new
+    assert make_agent(auto_send=False).run(NIGHT).decision == "already_covered"
+
+
+def test_discarded_prepared_action_frees_the_shift(make_agent, tmp_path):
+    from app.actions.executor import manager_decision
+
+    result = make_agent(auto_send=False).run(NIGHT)
+    manager_decision(tmp_path / "logs" / "outbox.jsonl", result.fired["action_id"], "discard", result.fired["message"])
+    again = make_agent(auto_send=False).run(NIGHT)
+    assert again.decision == "fired" and again.fired["params"] == {"staff_id": "S001"}

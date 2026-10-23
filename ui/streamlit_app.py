@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st  # noqa: E402
 
 from app.adapters.zetaris import DataSourceUnavailable  # noqa: E402
+from app.actions.executor import delivery_states, manager_decision  # noqa: E402
 from app.agent import PreflightAgent  # noqa: E402
 from app.config import ConfigError, load_config  # noqa: E402
 
@@ -54,7 +55,7 @@ go = st.button("Run Preflight", type="primary")
 if go:
     cfg = load_config(sample_scenario=scenario)
     try:
-        agent = PreflightAgent(cfg)
+        agent = PreflightAgent(cfg, auto_send=False)  # Preflight prepares, the manager sends
     except DataSourceUnavailable as exc:
         st.error(f"Data source unavailable: {exc}")
         st.stop()
@@ -82,16 +83,38 @@ if result:
             st.info("Would not book anyone.")
     with preflight_col:
         st.subheader("Preflight")
+        outbox = base.logs_dir / "outbox.jsonl"
+        handled = delivery_states(outbox)
         if result.decision == "already_covered":
-            st.success("Already covered by earlier actions that still pass every check. Nothing new sent.")
-        if result.actions:
-            for action in result.actions:
-                (st.warning if action["action"] == "withdraw" else st.success)(action["message"])
-            if result.decision == "partially_covered":
-                st.warning(f"Still short by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager.")
+            st.success("Already covered by earlier actions that still pass every check. Nothing new prepared.")
+        for action in result.actions:
+            if action["action"] in ("withdraw", "amend"):
+                st.warning(action["message"])
+                continue
+            for w in action.get("warnings", []):
+                st.warning(w)
+            if action.get("delivery") != "awaiting_manager":
+                st.success(action["message"])
+                continue
+            state = handled.get(action["action_id"])
+            if state == "sent":
+                st.success("Sent (simulated): " + action["message"])
+            elif state == "discarded":
+                st.info("Discarded: " + action["message"])
+            else:
+                st.info("**Ready to send** (every check passed): " + action["message"])
+                send, discard = st.columns(2)
+                if send.button("Send", key=f"send_{action['action_id']}", type="primary"):
+                    manager_decision(outbox, action["action_id"], "send", action["message"])
+                    st.rerun()
+                if discard.button("Discard", key=f"discard_{action['action_id']}"):
+                    manager_decision(outbox, action["action_id"], "discard", action["message"])
+                    st.rerun()
+        if result.decision == "partially_covered":
+            st.warning(f"Still short by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager.")
         elif result.decision == "unverifiable":
             st.error("No action: live data could not be verified.")
-        else:
+        elif result.decision == "no_safe_action":
             st.warning("No action: nothing passed every check. Escalated to the manager.")
 
     if result.rechecks:

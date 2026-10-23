@@ -89,8 +89,10 @@ class RunResult:
 
 
 class PreflightAgent:
-    def __init__(self, cfg: Config | None = None, source: SqlSource | None = None, generator: Generator | None = None):
+    def __init__(self, cfg: Config | None = None, source: SqlSource | None = None, generator: Generator | None = None,
+                 auto_send: bool = True):
         self.cfg = cfg or load_config()
+        self.auto_send = auto_send  # False: actions are prepared for the manager to send (UI)
         self.source = source or make_source(self.cfg)
         self._fallback_notes: list[str] = []
         if generator is not None:
@@ -263,7 +265,8 @@ class PreflightAgent:
                 continue
             name = reader.display_name(candidate.params.get("staff_id", "")) if "staff_id" in candidate.params else ""
             nurses = gate.shortfall if candidate.action == "escalate_to_agency" and gate.shortfall else 1
-            record = fire(candidate, request, audit, name, nurses=nurses, warnings=[w.explanation for w in gate.warnings])
+            record = fire(candidate, request, audit, name, nurses=nurses, warnings=[w.explanation for w in gate.warnings],
+                          auto_send=self.auto_send)
             result.actions.append(record)
             result.fired = result.fired or record
             result.decision = "fired"
