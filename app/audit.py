@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.roles import role_of
+
 
 def _write(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +35,7 @@ class AuditLog:
             "run_id": self.run_id,
             "seq": self.seq,
             "kind": kind,
+            "role": role_of(kind),
             **data,
         }
         self.events.append(record)

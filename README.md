@@ -39,11 +39,11 @@ booked Priya.
 
 - **UI:** `SAMPLE_MODE=true .venv/bin/streamlit run ui/streamlit_app.py`. Preflight prepares; you
   press **Send**.
-- **Tests:** `.venv/bin/pytest` runs 76 tests, including a small version of the safety scoreboard.
+- **Tests:** `.venv/bin/pytest` runs 79 tests, including a small version of the safety scoreboard.
 - **The same demo against real Zetaris and NVIDIA Nemotron** (three federated sources), without
   installing anything: [docs/live-run-2026-10-23.md](docs/live-run-2026-10-23.md)
 - **Scoreboard:** see [Safety evaluation](#safety-evaluation). Preflight has 0 people-safety
-  violations in 1200 random runs; the naive agent has 278.
+  violations in 1200 random runs; the naive agent has 279.
 
 ## The demo in one picture
 
@@ -71,7 +71,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 76 tests
+pytest                                                                                       # 79 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -218,14 +218,14 @@ with the app's SQL checks, so a bug in a check would show up as a disagreement. 
 | | Preflight | Naive agent (top-ranked pick, no checks) |
 |---|---|---|
 | Actions taken | 2434 | 1200 |
-| **People-safety violations** (on leave, missing skill, over hours, rest gap) | **0** | **278 (23.2%)** |
+| **People-safety violations** (on leave, missing skill, over hours, rest gap) | **0** | **279 (23.2%)** |
 | Unnecessary bookings only (ward already covered) | 0 | 89 (7.4%) |
-| Any rule broken | 0 | 367 (30.6%) |
+| Any rule broken | 0 | 368 (30.7%) |
 
 The headline is people-safety, meaning someone who shouldn't work that shift gets booked.
 Unnecessary bookings are counted separately; 31 naive bookings were both unnecessary and unsafe, so
 they count under people-safety. The naive agent's violations by rule: rest gap 122, hour cap 122,
-booking when the ward was already covered 120, on leave 60, missing skill 35. Preflight never used the agency while an eligible
+booking when the ward was already covered 120, on leave 60, missing skill 36. Preflight never used the agency while an eligible
 in-house nurse existed. The first version of this evaluation found it doing so in 12% of runs, which
 led to checking the rest of the staff pool before the agency. Repeat requests for the same shift
 happen too: 46 were answered "already covered" and 119 open actions were re-checked and kept, and the
@@ -265,21 +265,34 @@ flowchart LR
 
 The LLM only proposes. Only SQL evidence from Zetaris lets an action fire.
 
-## How it works
+## How it works: four agent roles and one feedback loop
+
+| Role | What it is in code | What it may do |
+|---|---|---|
+| **Planner** | LLM via the injected generator (`app/agents.py: Planner`, `app/planner.py`) | Reads the request, proposes and ranks staff, and re-plans once from the Verifier's refusals. It cannot make anything happen. |
+| **Verifier** | SQL precondition gate over Zetaris (`Verifier`, `app/preconditions/`) | Approves or rejects each candidate with evidence rows. The only role that lets an action fire. |
+| **Investigator** | LLM (`Investigator`) | When nothing passes, explains the refusals for the manager. |
+| **Memory** | Meterless H-MEM (`MemoryRole`, `app/meterless/hmem.py`) | Recalls the action library and past resolutions, learns from actions that fired, and lowers confidence in recalls the Verifier refused. |
+
+Every trace event in `logs/trace.jsonl` carries a `role` field (`app/roles.py`). World Model
+ingest, sending and the naive baseline are labelled `orchestrator` or `baseline`; they are plumbing,
+not agents.
 
 ```
-request ─► parse (generator, validated; rule fallback)
-        ─► World Model ingest  ◄── 5 read-only SQL queries via Zetaris adapter (provenance per row)
-        ─► H-MEM recall        (action library + learned templates, 8-signal ranker)
-        ─► plan                (generator ranks staff; validated against library + staff pool)
-        ─► for each candidate: precondition gate ── SQL checks via Zetaris ── all pass? ─► fire, learn, stop
-                                                                            └─ any fail ─► log evidence, next
-        ─► nothing passed: generator writes an investigation for the manager; no action
+request ─► Planner reads it (validated; rule fallback)
+        ─► World Model ingest   ◄── read-only SQL via Zetaris (provenance per row)
+        ─► Memory recall        (action library + learned actions)
+        ─► Verifier re-checks actions already sent for this shift (keep / withdraw / trim)
+        ─► Planner round 1 ─► Verifier checks each ─► pass: fire, Memory learns
+                                                   └─ fail: evidence logged; recalled? Memory feedback
+        ─► gap left: refusal reasons ─► Planner re-plans once ─► Verifier checks each
+        ─► backfill from the rest of the pool ─► Verifier ─► agency for exactly what's missing
+        ─► nothing passed: Investigator explains; no action
 ```
 
 | Path | What |
 |---|---|
-| `app/agent.py` | The loop above |
+| `app/agent.py`, `app/agents.py`, `app/roles.py` | The loop above, the four roles, and each trace event's role |
 | `app/actions/library.py` | Action specs and their fixed check lists |
 | `app/actions/executor.py` | Fires an action. Delivery is simulated: it writes to `logs/outbox.jsonl` |
 | `app/preconditions/checks.py` | 7 SQL checks; each returns evidence rows and a pass rule |

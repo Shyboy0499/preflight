@@ -86,6 +86,36 @@ def _rule_plan(data: dict[str, Any]) -> str:
     return json.dumps({"candidates": candidates})
 
 
+def _rule_replan(data: dict[str, Any]) -> str:
+    """Use the Verifier's refusal reasons: skip staff whose World Model facts show the
+    same problem (a heuristic on facts; the Verifier still checks every proposal)."""
+    refused = {c for r in data.get("refusals", []) for c in r.get("failed_checks", [])}
+    tried = set(data.get("already_tried", []))
+    shift_hours = float(data.get("shift_hours") or 0)
+
+    def avoids(p: dict[str, Any]) -> bool:
+        if p["staff_id"] in tried or p.get("already_on_this_shift"):
+            return False
+        if "staff_not_on_leave" in refused and p.get("leave_on_date"):
+            return False
+        if "has_required_skill" in refused and p.get("has_required_skill") is False:
+            return False
+        if "under_weekly_hour_cap" in refused and float(p.get("week_hours") or 0) + shift_hours > float(p.get("weekly_hour_cap") or 0):
+            return False
+        if "no_conflicting_shift" in refused and p.get("shifts_on_date"):
+            return False
+        return True
+
+    pool = sorted((p for p in data["staff_pool"] if avoids(p)),
+                  key=lambda p: (not p.get("has_required_skill"), p.get("home_ward") != data["ward"], float(p.get("week_hours") or 0), p["staff_id"]))
+    reasons = sorted(refused)
+    return json.dumps({"candidates": [
+        {"action": "offer_shift_to_staff", "params": {"staff_id": p["staff_id"]},
+         "reason": "avoids earlier refusals: " + ", ".join(reasons)}
+        for p in pool[: data.get("max_offers", 4)]
+    ]})
+
+
 def _rule_investigate(data: dict[str, Any]) -> str:
     lines = [f"No action passed its checks for {data['shift']}. Do not book anyone automatically."]
     for attempt in data.get("attempts", []):
@@ -100,6 +130,7 @@ def _rule_investigate(data: dict[str, Any]) -> str:
 _RULE_TASKS: dict[str, Callable[[dict[str, Any]], str]] = {
     "parse_request": _rule_parse,
     "plan_candidates": _rule_plan,
+    "replan_candidates": _rule_replan,
     "investigate": _rule_investigate,
 }
 

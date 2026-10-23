@@ -343,3 +343,56 @@ def test_discarded_prepared_action_frees_the_shift(make_agent, tmp_path):
     manager_decision(tmp_path / "logs" / "outbox.jsonl", result.fired["action_id"], "discard", result.fired["message"])
     again = make_agent(auto_send=False).run(NIGHT)
     assert again.decision == "fired" and again.fired["params"] == {"staff_id": "S001"}
+
+
+def test_every_trace_event_names_its_role(make_agent, tmp_path):
+    from app.roles import ROLE_OF_EVENT
+
+    make_agent("scenario_a").run(NIGHT)
+    make_agent("scenario_b").run(NIGHT)  # re-check, withdraw, replan, investigation-free agency path
+    events = read_jsonl(tmp_path / "logs" / "trace.jsonl")
+    assert all(e["role"] in {"planner", "verifier", "investigator", "memory", "orchestrator", "baseline"} for e in events)
+    for e in events:
+        if e["kind"] in ROLE_OF_EVENT:
+            assert e["role"] == ROLE_OF_EVENT[e["kind"]]
+    kinds_by_role = {(e["kind"], e["role"]) for e in events}
+    assert {("plan", "planner"), ("gate", "verifier"), ("recheck", "verifier"), ("memory_recall", "memory")} <= kinds_by_role
+
+
+def test_verifier_refusals_go_back_to_the_planner_for_one_replan(make_agent, tmp_path):
+    seen = {}
+
+    def planner_llm(prompt, system_prompt):
+        from app.adapters.llm import rule_based_generator, task_input
+        if "TASK: plan_candidates" in system_prompt:
+            return '{"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "S002"}}]}'
+        if "TASK: replan_candidates" in system_prompt:
+            seen["replan_input"] = task_input(prompt)
+            return '{"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "S001"}, "reason": "has the skill"}]}'
+        return rule_based_generator(prompt, system_prompt)
+
+    result = make_agent("scenario_a", generator=planner_llm).run(NIGHT)
+    refusals = seen["replan_input"]["refusals"]
+    assert refusals[0]["staff_id"] == "S002" and refusals[0]["failed_checks"] == ["has_required_skill"]
+    assert "missing required skill cardiac_telemetry" in refusals[0]["reasons"][0]
+    assert seen["replan_input"]["already_tried"] == ["S002"]
+    assert result.fired["params"] == {"staff_id": "S001"}
+    fired_by = next(a for a in result.attempts if a.passed and a.candidate.action == "offer_shift_to_staff")
+    assert fired_by.candidate.origin == "replan"  # found by the second round, not backfill
+    order = [(e["role"], e["kind"]) for e in read_jsonl(tmp_path / "logs" / "trace.jsonl") if e["kind"] in ("plan", "gate", "replan")]
+    assert order[:4] == [("planner", "plan"), ("verifier", "gate"), ("verifier", "gate"), ("planner", "replan")]
+
+
+def test_rule_based_replan_avoids_the_refused_reasons():
+    import json
+    from app.adapters.llm import _rule_replan
+
+    pool = [
+        {"staff_id": "A", "home_ward": "4B", "has_required_skill": True, "shifts_on_date": ["4B day"], "week_hours": 8, "weekly_hour_cap": 38},
+        {"staff_id": "B", "home_ward": "4B", "has_required_skill": False, "shifts_on_date": [], "week_hours": 8, "weekly_hour_cap": 38},
+        {"staff_id": "C", "home_ward": "4B", "has_required_skill": True, "shifts_on_date": [], "week_hours": 36, "weekly_hour_cap": 38},
+        {"staff_id": "D", "home_ward": "3A", "has_required_skill": True, "shifts_on_date": [], "week_hours": 8, "weekly_hour_cap": 38},
+    ]
+    out = json.loads(_rule_replan({"ward": "4B", "shift_hours": 10, "staff_pool": pool, "already_tried": ["X"],
+                                   "refusals": [{"failed_checks": ["no_conflicting_shift", "has_required_skill", "under_weekly_hour_cap"]}]}))
+    assert [c["params"]["staff_id"] for c in out["candidates"]] == ["D"]

@@ -75,7 +75,15 @@ def main(argv: list[str] | None = None) -> int:
             row = next((c.evidence[0] for c in gate.failed if c.evidence), None)
             if row:
                 print(f"         evidence {row}")
+    replan_shown = False
     for a in result.attempts:
+        if result.replans and not replan_shown and a.candidate.origin in ("replan", "backfill") or (
+                result.replans and not replan_shown and a.candidate.action == "escalate_to_agency"):
+            rp = result.replans[0]
+            reasons = sorted({c for r in rp["refusals"] for c in r["failed_checks"]})
+            print(f"[REPLAN] Planner gets {len(rp['refusals'])} refusal(s) from the Verifier ({', '.join(reasons)}) "
+                  f"-> proposes {', '.join(names.get(x, x) for x in rp['proposed']) or 'nobody new'}")
+            replan_shown = True
         sid = a.candidate.params.get("staff_id")
         who = f" [{names.get(sid, sid)}]" if sid else ""
         if not a.passed and not args.verbose:  # compact: one line, the failed checks and first evidence row

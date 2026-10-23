@@ -131,7 +131,13 @@ if result:
                     if c.evidence:
                         st.dataframe(c.evidence, hide_index=True, width="stretch")
 
-    st.subheader("Candidates and precondition checks")
+    st.subheader("Verifier: candidates and precondition checks")
+    st.caption("Planner (LLM) proposes · Verifier (SQL over Zetaris) approves or rejects with evidence · "
+               "refusal reasons go back to the Planner once · Memory (H-MEM) recalls and learns")
+    for rp in result.replans:
+        reasons = sorted({c for r in rp["refusals"] for c in r["failed_checks"]})
+        st.info(f"Re-plan: the Planner received {len(rp['refusals'])} refusal(s) ({', '.join(reasons)}) and proposed "
+                + (", ".join(result.world["names"].get(x, x) for x in rp["proposed"]) or "nobody new"))
     for a in result.attempts:
         icon = "✅" if a.passed else "⛔"
         sid = a.candidate.params.get("staff_id")

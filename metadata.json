@@ -65,13 +65,25 @@
     },
     "naive_baseline": {
       "actions": 1200,
-      "people_safety_violations": "278 (23.2%)",
+      "people_safety_violations": "279 (23.2%)",
       "unnecessary_bookings_only": "89 (7.4%)",
-      "any_rule_broken": "367 (30.6%)"
+      "any_rule_broken": "368 (30.7%)",
+      "definition": "the Planner's round-1 top pick, sent without verification"
     },
     "reproduce": "python -m evals.run_safety_eval --worlds 200 --requests 6",
     "results": "evals/results/latest.md"
   },
   "built_with": "Claude Code; Cursor not used",
-  "live_evidence": "docs/live-run-2026-10-23.md"
+  "live_evidence": "docs/live-run-2026-10-23.md",
+  "agent_roles": {
+    "planner": "LLM via the injected generator: reads the request, proposes and ranks, re-plans once from refusals",
+    "verifier": "SQL precondition gate over Zetaris: approves or rejects with evidence; only role that can fire",
+    "investigator": "LLM: explains refusals when nothing passes",
+    "memory": "Meterless H-MEM: recall, learn, feedback",
+    "code": [
+      "app/agents.py",
+      "app/roles.py",
+      "app/agent.py"
+    ]
+  }
 }

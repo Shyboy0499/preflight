@@ -5,7 +5,7 @@
     "seed": 7,
     "generator": "rule-based"
   },
-  "seconds": 100.3,
+  "seconds": 101.5,
   "stats": {
     "runs": 1200,
     "decision:fired": 1029,
@@ -15,8 +15,8 @@
     "rechecks_kept": 119,
     "unjustified_withdrawals": 0,
     "naive_actions": 1200,
-    "naive_unsafe_actions": 367,
-    "naive_people_unsafe": 278,
+    "naive_unsafe_actions": 368,
+    "naive_people_unsafe": 279,
     "naive_unnecessary_only": 89,
     "decision:already_covered": 46,
     "decision:partially_covered": 101,
@@ -28,7 +28,7 @@
     "rest_conflict": 122,
     "on_leave": 60,
     "over_hour_cap": 122,
-    "missing_skill": 35
+    "missing_skill": 36
   },
   "failures": []
 }
