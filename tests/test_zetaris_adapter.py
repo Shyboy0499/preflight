@@ -146,3 +146,8 @@ def test_admin_path_sends_one_statement_and_still_rejects_chains():
     assert seen["sql"] == 'CREATE LIGHTNING DATABASE PREFLIGHT_FILES DESCRIBE BY "x"'
     with pytest.raises(UnsafeQuery):
         src.execute_admin("CREATE X; DROP Y")
+
+
+def test_rest_timestamps_drop_the_trailing_fraction():
+    body = {"data": [["S001", "2026-10-27 07:00:00.0"]], "headers": ["staff_id", "cap"]}
+    assert make(lambda r: httpx.Response(200, json=body)).run(Q, {"sid": "S001"}).rows[0]["cap"] == "2026-10-27 07:00:00"

@@ -60,7 +60,7 @@ def say(kind: str, text: str) -> None:
 def zetaris_statements(password: str) -> list[tuple[str, str, str]]:
     """(object kind, object name, SQL). One statement each, no semicolons."""
     out = [
-        ("database", FILE_DB, f'CREATE LIGHTNING DATABASE {FILE_DB} DESCRIBE BY "Preflight roster, demand, staff, wards (synthetic CSV)"'),
+        ("database", FILE_DB, f'CREATE LIGHTNING DATABASE {FILE_DB} DESCRIBE BY "Preflight_roster_demand_staff_wards_synthetic_CSV"'),
     ]
     for t in FILE_TABLES:
         out.append((
@@ -70,11 +70,11 @@ def zetaris_statements(password: str) -> list[tuple[str, str, str]]:
         ))
     out += [
         ("datasource", PG_DATASOURCE,
-         f'CREATE DATASOURCE {PG_DATASOURCE} DESCRIBE BY "Preflight leave system (synthetic Postgres)" OPTIONS ('
+         f'CREATE DATASOURCE {PG_DATASOURCE} DESCRIBE BY "Preflight_leave_system_synthetic_Postgres" OPTIONS ('
          f'jdbcdriver "org.postgresql.Driver", jdbcurl "jdbc:postgresql://{PG_CONTAINER}:5432/{PG_DB}", '
          f'username "{PG_USER}", password "{password}", fetchsize "1000")'),
         ("datasource-table", "leave", f'REGISTER DATASOURCE TABLE "leave" FROM {PG_DATASOURCE}'),
-        ("database", API_DB, f'CREATE LIGHTNING DATABASE {API_DB} DESCRIBE BY "Preflight staff skills service (synthetic REST)"'),
+        ("database", API_DB, f'CREATE LIGHTNING DATABASE {API_DB} DESCRIBE BY "Preflight_staff_skills_service_synthetic_REST"'),
         (f"table:{API_DB}", "staff_skills",
          f"CREATE LIGHTNING REST TABLE staff_skills FROM {API_DB} REQUEST ("
          f'endpoint "{SKILLS_URL_FOR_ZETARIS}", method "GET", http_encoding "URLENCODED", '

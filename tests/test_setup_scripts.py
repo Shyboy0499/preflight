@@ -24,3 +24,16 @@ def test_setup_statements_are_single_and_cover_three_source_types():
 def test_dry_run_output_masks_the_postgres_password():
     shown = " ".join(sql for _, _, sql in setup_zetaris.zetaris_statements(setup_zetaris.MASK))
     assert "pw-secret" not in shown and 'password "********"' in shown
+
+
+def test_descriptions_use_only_characters_zetaris_accepts():
+    import re
+
+    for _, _, sql in setup_zetaris.zetaris_statements("pw"):
+        m = re.search(r'DESCRIBE BY "([^"]*)"', sql)
+        if m:
+            assert re.fullmatch(r"[A-Za-z0-9_.,-]+", m.group(1)), m.group(1)
+
+
+def test_file_tables_live_under_the_zetaris_local_root():
+    assert _infra.CUSTOMER_DATA_DIR.startswith("/home/zetaris/customer-data/shared/")

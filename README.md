@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 67 tests
+pytest                                                                                       # 71 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -335,6 +335,16 @@ Needs Docker and a local Zetaris instance (see
 
 If the LLM is unreachable, each call falls back to the rule-based generator and an `llm_fallback`
 event is logged. If Zetaris is unreachable, nothing fires.
+
+Verified live on 2026-10-23 (local Zetaris 2.4.3, `nvidia/nemotron-3.5-lightning-30b-a3b`): scenario A
+offers to Priya in about 8 s; after `demo_toggle_leave.py on`, the same request withdraws that offer
+with the Postgres leave row as evidence and raises one agency request in about 14 s. Each candidate's
+checks run concurrently against Zetaris.
+
+Notes from setting it up: Zetaris accepts local file tables only under its
+`ZETARIS_LOCAL_FILE_SYTEM_ROOT_PATH` (`/home/zetaris/customer-data/shared` on a local install). Any
+other path fails with `Invalid file path to access`. Object descriptions may use only letters,
+digits and `_ . - ,`.
 
 ## Logs
 

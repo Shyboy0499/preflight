@@ -1,7 +1,7 @@
 """Shared settings for the live-demo infrastructure scripts.
 
 Live layout (three systems, joined by Zetaris):
-  PREFLIGHT_FILES  Lightning file source over CSVs in the Zetaris customer-data volume:
+  PREFLIGHT_FILES  Lightning file source over CSVs in the Zetaris customer-data/shared volume:
                    staff, roster, demand, wards
   preflight_pg     JDBC datasource: the "leave system", a Postgres container (leave)
   PREFLIGHT_API    Lightning REST source: the "HR skills system", services/skills_api.py
@@ -28,7 +28,9 @@ SAMPLE_B = ROOT / "data" / "sample" / "scenario_b"
 
 ZETARIS_NETWORK = os.environ.get("ZETARIS_DOCKER_NETWORK", "zetaris_default")
 ZETARIS_DRIVER = os.environ.get("ZETARIS_DRIVER_CONTAINER", "zetaris-driver-1")
-CUSTOMER_DATA_DIR = "/home/zetaris/customer-data/preflight"
+# Zetaris only accepts local file tables under ZETARIS_LOCAL_FILE_SYTEM_ROOT_PATH
+# (customer-data/shared on a local install); anything else fails with "Invalid file path to access".
+CUSTOMER_DATA_DIR = "/home/zetaris/customer-data/shared/preflight"
 
 FILE_DB = "PREFLIGHT_FILES"
 API_DB = "PREFLIGHT_API"

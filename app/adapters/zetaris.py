@@ -165,8 +165,14 @@ def _normalise(value: Any) -> Any:
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?([eE][-+]?\d+)?$")
 
 
+_TIMESTAMP_FRACTION = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.0+$")
+
+
 def _coerce_rest_value(value: Any) -> Any:
-    """Zetaris REST returns values as strings; decimals may use exponent form."""
+    """Zetaris REST returns values as strings; decimals may use exponent form,
+    and timestamps carry a trailing '.0' (normalised to match the sample source)."""
+    if isinstance(value, str) and (m := _TIMESTAMP_FRACTION.match(value)):
+        return m.group(1)
     if isinstance(value, str) and _NUMBER.match(value):
         number = float(value)
         return int(number) if number.is_integer() and "." not in value and "e" not in value.lower() else number
@@ -223,6 +229,7 @@ class ZetarisRestSource:
 
     name = "zetaris"
     RUN_PATH = "/sql-editor/sqls/run"
+    concurrent = True  # httpx.Client is thread-safe; checks may run in parallel
 
     def __init__(self, cfg: Config, client: httpx.Client | None = None):
         missing = [n for n, v in (("ZETARIS_API_KEY", cfg.zetaris_api_key), ("ZETARIS_ORG_ID", cfg.zetaris_org_id)) if not v]

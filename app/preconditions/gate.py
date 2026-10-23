@@ -6,6 +6,7 @@ check whose data cannot be fetched counts as failed (fail closed).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -88,28 +89,27 @@ def evaluate(source: SqlSource, request: ShiftRequest, candidate: Candidate, pen
         return GateResult(candidate, [CheckResult("params_present", "fail", f"missing params: {', '.join(missing)}")])
 
     params = build_params(request, candidate, pending_cover)
-    results: list[CheckResult] = []
-    for name in spec.checks:
+
+    def run_check(name: str) -> CheckResult:
         check = ALL_CHECKS[name]
         try:
             fetched = source.run(check.query, params)
         except (DataSourceUnavailable, UnsafeQuery) as exc:
-            results.append(CheckResult(name, "error", f"could not verify, treated as failed: {exc}"))
-            continue
+            return CheckResult(name, "error", f"could not verify, treated as failed: {exc}")
         try:
             status = "pass" if check.passes(fetched.rows, params) else "fail"
             explanation = check.explain(fetched.rows, params)
         except (KeyError, TypeError, ValueError) as exc:
             status, explanation = "error", f"evidence rows malformed, treated as failed: {exc!r}"
-        results.append(
-            CheckResult(
-                name,
-                status,
-                explanation,
-                evidence=fetched.rows,
-                provenance=fetched.provenance(),
-            )
-        )
+        return CheckResult(name, status, explanation, evidence=fetched.rows, provenance=fetched.provenance())
+
+    # The checks are independent read-only queries: run them concurrently when the
+    # source allows it (live Zetaris round-trips dominate). Results keep spec order.
+    if getattr(source, "concurrent", False) and len(spec.checks) > 1:
+        with ThreadPoolExecutor(max_workers=len(spec.checks)) as pool:
+            results = list(pool.map(run_check, spec.checks))
+    else:
+        results = [run_check(name) for name in spec.checks]
     gate = GateResult(candidate, results)
     staffing = next((r for r in results if r.name == "ward_actually_understaffed" and r.status != "error"), None)
     if staffing is not None:

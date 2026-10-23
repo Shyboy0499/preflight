@@ -131,3 +131,21 @@ def test_key_checks_join_across_zetaris_sources_in_one_query(check_name, sources
     sql = render(ALL_CHECKS[check_name].query, build_params(NIGHT, offer("S001")), LIVE_TABLES)
     used = {name.split(".")[0] for name in LIVE_TABLES.values() if name in sql}
     assert used == sources
+
+
+def test_concurrent_sources_give_identical_results_in_spec_order(src_b):
+    class Concurrent:
+        concurrent = True
+        name = "concurrent"
+        tables = src_b.tables
+
+        def run(self, query, params=None):
+            import threading
+            with lock:  # duckdb connection is not thread-safe; zetaris over httpx is
+                return src_b.run(query, params)
+
+    import threading
+    lock = threading.Lock()
+    serial = evaluate(src_b, NIGHT, offer("S008"))
+    parallel = evaluate(Concurrent(), NIGHT, offer("S008"))
+    assert [(r.name, r.status, r.explanation) for r in parallel.results] == [(r.name, r.status, r.explanation) for r in serial.results]

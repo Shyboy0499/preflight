@@ -40,7 +40,8 @@ You support a nurse unit manager. No automatic action passed its safety checks.
 Using only the facts and failed checks given, explain briefly what blocked each
 option and what the manager should consider next. Do not claim anything was booked."""
 
-RECALL_THRESHOLD = 0.25  # tuned for the local hashing embedder (H-MEM default is 0.35)
+RECALL_THRESHOLD = 0.25
+  # tuned for the local hashing embedder (H-MEM default is 0.35)
 
 
 @dataclass
@@ -282,7 +283,8 @@ class PreflightAgent:
             result.shortfall_remaining = remaining
 
         if naive_pick:
-            naive_gate = next((a for a in result.attempts if a.candidate.key() == naive_pick.key()), None) \
+            known = [*result.attempts, *(r["gate"] for r in result.rechecks)]
+            naive_gate = next((a for a in known if a.candidate.action == naive_pick.action and a.candidate.params == naive_pick.params), None) \
                 or evaluate(self.source, request, naive_pick)  # shadow only, never fired
             result.naive = {
                 "would_fire": naive_pick.label(),
