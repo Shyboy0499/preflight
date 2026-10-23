@@ -68,51 +68,74 @@ class World:
 
 
 def verify(world: World, ward: str, day: str, shift: str, actions: list[dict], decision: str,
-           shortfall_remaining: int | None) -> list[str]:
-    """Return every rule the run's actions broke (empty list = safe)."""
+           shortfall_remaining: int | None, rechecks: list[dict] | None = None) -> list[str]:
+    """Return every rule the run broke (empty list = safe).
+
+    `rechecks` are earlier open actions the agent re-checked this run, in order:
+    a kept one must still satisfy every rule (except the agency head-count,
+    which was fixed when it was sent); a withdrawn one must really break a rule,
+    otherwise it is reported as `unjustified_withdrawal` (wasteful, not unsafe).
+    """
     violations: list[str] = []
     demand = world.demand.get((ward, day, shift))
     required = int(demand["required_nurses"]) if demand else None
     available = world.available(ward, day, shift)
-    pending = 0
+    state = {"pending": 0}
 
     def short() -> bool:
-        return required is not None and available + pending < required
+        return required is not None and available + state["pending"] < required
 
-    for a in actions:
+    def check(a: dict, prefix: str = "", exact_agency: bool = True) -> list[str]:
+        """Rules for one action at the current pending cover; adds it to pending."""
+        found: list[str] = []
         kind = a["action"]
         if kind == "offer_shift_to_staff":
             sid = a["params"]["staff_id"]
             if sid not in world.staff:
-                violations.append(f"offer:{sid}:unknown_staff")
-                continue
+                return [f"{prefix}offer:{sid}:unknown_staff"]
             if not short():
-                violations.append(f"offer:{sid}:ward_not_short")
+                found.append(f"{prefix}offer:{sid}:ward_not_short")
             if world.on_leave(sid, day):
-                violations.append(f"offer:{sid}:on_leave")
+                found.append(f"{prefix}offer:{sid}:on_leave")
             if demand and demand["required_skill"] not in world.skills.get(sid, set()):
-                violations.append(f"offer:{sid}:missing_skill")
+                found.append(f"{prefix}offer:{sid}:missing_skill")
             if world.week_hours(sid, day) + SHIFTS[shift][2] > float(world.staff[sid]["weekly_hour_cap"]):
-                violations.append(f"offer:{sid}:over_hour_cap")
+                found.append(f"{prefix}offer:{sid}:over_hour_cap")
             if world.rest_conflict(sid, day, shift):
-                violations.append(f"offer:{sid}:rest_conflict")
-            pending += 1
+                found.append(f"{prefix}offer:{sid}:rest_conflict")
+            state["pending"] += 1
         elif kind == "escalate_to_agency":
             if not short():
-                violations.append("agency:ward_not_short")
+                found.append(f"{prefix}agency:ward_not_short")
             if world.wards.get(ward, {}).get("agency_allowed", "false").lower() != "true":
-                violations.append("agency:not_allowed")
-            if required is not None and a.get("nurses") != required - available - pending:
-                violations.append(f"agency:asked_{a.get('nurses')}_needed_{required - available - pending}")
-            pending += int(a.get("nurses") or 0)
+                found.append(f"{prefix}agency:not_allowed")
+            needed = (required or 0) - available - state["pending"]
+            if exact_agency and required is not None and a.get("nurses") != needed:
+                found.append(f"{prefix}agency:asked_{a.get('nurses')}_needed_{needed}")
+            state["pending"] += int(a.get("nurses") or 0)
         elif kind == "no_cover_needed":
             if required is None or available < required:
-                violations.append("no_cover:actually_short")
+                found.append(f"{prefix}no_cover:actually_short")
+        return found
 
-    if decision == "fired" and short():
-        violations.append(f"claimed_covered_but_short_by_{required - available - pending}")
-    if decision == "partially_covered" and required is not None and shortfall_remaining != required - available - pending:
-        violations.append(f"wrong_remaining_{shortfall_remaining}_true_{required - available - pending}")
+    for r in rechecks or []:
+        before = state["pending"]
+        found = check(r["record"], prefix="kept:", exact_agency=False)
+        if r["status"] == "kept":
+            violations += found
+        else:
+            state["pending"] = before  # withdrawn: no longer counts as cover
+            if not found:
+                violations.append(f"unjustified_withdrawal:{r['record']['action']}")
+
+    for a in actions:
+        if a["action"] != "withdraw":
+            violations += check(a)
+
+    if decision in ("fired", "already_covered") and short():
+        violations.append(f"claimed_covered_but_short_by_{required - available - state['pending']}")
+    if decision == "partially_covered" and required is not None and shortfall_remaining != required - available - state["pending"]:
+        violations.append(f"wrong_remaining_{shortfall_remaining}_true_{required - available - state['pending']}")
     return violations
 
 

@@ -16,6 +16,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print the full run as JSON")
     parser.add_argument("--reset-memory", action="store_true", help="forget learned H-MEM memories before running")
     parser.add_argument("--verbose", action="store_true", help="show every check of every candidate")
+    parser.add_argument("--reset-actions", action="store_true",
+                        help="archive logs/outbox.jsonl so no earlier offers count as open (fresh demo)")
     args = parser.parse_args(argv)
 
     if args.scenario:
@@ -32,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.reset_memory:
         shutil.rmtree(cfg.state_dir, ignore_errors=True)
+    outbox = cfg.logs_dir / "outbox.jsonl"
+    if args.reset_actions and outbox.exists():
+        import time
+
+        outbox.rename(outbox.with_name(f"outbox.archived-{int(time.time())}.jsonl"))
     try:
         agent = PreflightAgent(cfg)
     except DataSourceUnavailable as exc:
@@ -56,6 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"World      {rep['observations']} observations from {rep['queries_run']} Zetaris queries" + (f"  ERRORS: {rep['errors']}" if rep["errors"] else ""))
     print()
     names = (result.world or {}).get("names", {})
+    for r in result.rechecks:
+        rec, gate = r["record"], r["gate"]
+        sid = rec["params"].get("staff_id")
+        who = f" [{names.get(sid, sid)}]" if sid else ""
+        label = f"{rec['action']}({', '.join(f'{k}={v}' for k, v in rec['params'].items())}){who} sent in {rec.get('run_id')}"
+        if r["status"] == "kept":
+            print(f"[OPEN] {label}: re-checked, every check still passes")
+        else:
+            print(f"[WITHDRAW] {label}: " + "; ".join(f"{c.name}: {c.explanation}" for c in gate.failed))
+            row = next((c.evidence[0] for c in gate.failed if c.evidence), None)
+            if row:
+                print(f"         evidence {row}")
     for a in result.attempts:
         sid = a.candidate.params.get("staff_id")
         who = f" [{names.get(sid, sid)}]" if sid else ""

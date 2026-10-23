@@ -82,15 +82,31 @@ if result:
             st.info("Would not book anyone.")
     with preflight_col:
         st.subheader("Preflight")
+        if result.decision == "already_covered":
+            st.success("Already covered by earlier actions that still pass every check. Nothing new sent.")
         if result.actions:
             for action in result.actions:
-                st.success(action["message"])
+                (st.warning if action["action"] == "withdraw" else st.success)(action["message"])
             if result.decision == "partially_covered":
                 st.warning(f"Still short by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager.")
         elif result.decision == "unverifiable":
             st.error("No action: live data could not be verified.")
         else:
             st.warning("No action: nothing passed every check. Escalated to the manager.")
+
+    if result.rechecks:
+        st.subheader("Earlier actions for this shift, re-checked")
+        for r in result.rechecks:
+            rec = r["record"]
+            sid = rec["params"].get("staff_id")
+            who = result.world["names"].get(sid, sid) if sid else "agency"
+            if r["status"] == "kept":
+                st.info(f"Still valid: {rec['action']} · {who} (sent in {rec.get('run_id')})")
+            else:
+                st.error(f"Withdrawn: {rec['action']} · {who}: " + "; ".join(f"{c.name}: {c.explanation}" for c in r["gate"].failed))
+                for c in r["gate"].failed:
+                    if c.evidence:
+                        st.dataframe(c.evidence, hide_index=True, width="stretch")
 
     st.subheader("Candidates and precondition checks")
     for a in result.attempts:

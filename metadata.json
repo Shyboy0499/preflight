@@ -57,7 +57,7 @@
   ],
   "evaluation": {
     "method": "200 random synthetic worlds x 6 requests; every action re-checked by an independent oracle (evals/oracle.py)",
-    "preflight_unsafe_actions": "0 of 2553",
+    "preflight_unsafe_actions": "0 of 2434",
     "naive_unsafe_actions": "367 of 1200 (30.6%)",
     "results": "evals/results/latest.md"
   }

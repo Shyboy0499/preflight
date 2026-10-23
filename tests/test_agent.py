@@ -13,8 +13,8 @@ NIGHT = "Ward 4B needs night cover tomorrow"
 
 @pytest.fixture
 def make_agent(tmp_path):
-    def _make(scenario="scenario_a", **kw):
-        cfg = load_config(sample_mode=True, sample_scenario=scenario, logs_dir=tmp_path / "logs", state_dir=tmp_path / "state")
+    def _make(scenario="scenario_a", logs="logs", **kw):
+        cfg = load_config(sample_mode=True, sample_scenario=scenario, logs_dir=tmp_path / logs, state_dir=tmp_path / "state")
         return PreflightAgent(cfg, **kw)
 
     return _make
@@ -97,20 +97,20 @@ def test_memory_is_learned_recalled_and_penalised_but_never_skips_checks(make_ag
     learned = first.learned_memory_id
     assert learned
 
-    second = make_agent("scenario_b").run(NIGHT)  # fresh process, same state dir
+    second = make_agent("scenario_b", logs="logs_b").run(NIGHT)  # same memory, separate outbox
     assert learned in [m["id"] for m in second.memory_trace["returned"]]
     priya = next(a for a in second.attempts if a.candidate.params.get("staff_id") == "S001")
     assert priya.candidate.origin == "memory"
     assert len(priya.results) == 5 and not priya.passed  # all checks still ran
 
-    ledger = read_jsonl(tmp_path / "logs" / "hmem_ledger.jsonl")
+    ledger = read_jsonl(tmp_path / "logs_b" / "hmem_ledger.jsonl")
     feedback = [e for e in ledger if e["memory_id"] == learned and e["action"] == "feedback"]
     assert feedback and feedback[-1]["signal"] == "not_helpful"
 
 
 def test_repeat_success_reinforces_existing_memory(make_agent):
-    agent = make_agent("scenario_a")
-    a = agent.run(NIGHT).learned_memory_id
+    a = make_agent("scenario_a").run(NIGHT).learned_memory_id
+    agent = make_agent("scenario_a", logs="logs_2")  # same memory, fresh outbox
     b = agent.run(NIGHT).learned_memory_id
     assert a == b
     assert agent.memory.get(a).confidence == pytest.approx(0.75)
@@ -185,7 +185,7 @@ def test_recalled_staff_are_gated_even_when_the_generator_skips_them(make_agent)
         from app.adapters.llm import rule_based_generator
         return rule_based_generator(prompt, system_prompt)
 
-    result = make_agent("scenario_b", generator=skips_priya).run(NIGHT)
+    result = make_agent("scenario_b", logs="logs_b", generator=skips_priya).run(NIGHT)
     first_offer = next(a for a in result.attempts if a.candidate.action == "offer_shift_to_staff")
     assert first_offer.candidate.params == {"staff_id": "S001"} and first_offer.candidate.origin == "memory"
     assert [r.name for r in first_offer.failed] == ["staff_not_on_leave"]
@@ -233,3 +233,31 @@ def test_stops_trying_once_the_ward_is_known_not_short(make_agent):
     result = make_agent().run("Ward 9Z needs cover tonight")
     assert [a.candidate.action for a in result.attempts] == ["no_cover_needed", "offer_shift_to_staff"]
     assert result.decision == "no_safe_action" and not result.actions
+
+
+
+def test_repeating_a_request_does_not_send_a_second_offer(make_agent):
+    make_agent("scenario_a").run(NIGHT)
+    again = make_agent("scenario_a").run(NIGHT)
+    assert again.decision == "already_covered"
+    assert again.actions == [] and again.fired is None
+    assert [(r["status"], r["record"]["params"]) for r in again.rechecks] == [("kept", {"staff_id": "S001"})]
+    assert "ALREADY COVERED" in again.summary
+
+
+def test_new_leave_withdraws_the_open_offer_with_evidence_and_recovers(make_agent, tmp_path):
+    make_agent("scenario_a").run(NIGHT)  # offer sent to Priya
+    result = make_agent("scenario_b").run(NIGHT)  # same world, Priya's leave now recorded
+    (recheck,) = result.rechecks
+    assert recheck["status"] == "withdrawn"
+    assert [r.name for r in recheck["gate"].failed] == ["staff_not_on_leave"]
+    assert recheck["gate"].failed[0].evidence[0]["leave_type"] == "annual"
+    withdrawn, agency = result.actions
+    assert withdrawn["action"] == "withdraw" and withdrawn["ref"] == recheck["record"]["action_id"]
+    assert agency["action"] == "escalate_to_agency" and agency["nurses"] == 1
+    assert all(a.candidate.params.get("staff_id") != "S001" for a in result.attempts)  # not re-offered
+    assert result.naive["unsafe"] is True  # a naive agent would still book her
+    outbox = read_jsonl(tmp_path / "logs" / "outbox.jsonl")
+    assert [r["action"] for r in outbox] == ["offer_shift_to_staff", "withdraw", "escalate_to_agency"]
+    # and the next request sees the agency request as cover
+    assert make_agent("scenario_b").run(NIGHT).decision == "already_covered"

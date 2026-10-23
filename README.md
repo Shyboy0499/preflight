@@ -48,7 +48,7 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 65 tests
+pytest                                                                                       # 67 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
@@ -60,8 +60,8 @@ CLI options: `--scenario scenario_a|scenario_b`, `--json` (full run as JSON), `-
 
 ## Sample inputs and outputs
 
-Real CLI output (compact view; `--verbose` shows every check), run in this order from a fresh clone so
-memory carries over. Regenerate with the commands in the Quick start.
+Real CLI output (compact view; `--verbose` shows every check), run in this order on a fresh clone.
+Memory and open actions carry over between runs; `--reset-memory` and `--reset-actions` start over.
 
 **1. `"Ward 4B needs night cover tomorrow"` on scenario A: the offer fires**
 ```
@@ -77,14 +77,14 @@ Recalled   0 H-MEM memories
 FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001): Ward 4B night shift 2026-10-27.
 ```
 
-**2. The same request on scenario B: memory suggests Priya, the gate refuses her with evidence, agency**
+**2. The same request after Priya's leave is recorded (scenario B): her open offer is withdrawn with evidence, then agency**
 ```
 Recalled   1 H-MEM memories
            0.40  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understaff
+[WITHDRAW] offer_shift_to_staff(staff_id=S001) [Priya Raman] sent in run_68c58aac25: staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+         evidence {'staff_id': 'S001', 'leave_type': 'annual', 'start_date': '2026-10-26', 'end_date': '2026-10-30', 'status': 'approved'}
 [FAIL] no_cover_needed() <default>  ward_adequately_staffed: 3 of 4 required nurses available (after approved leave)
          evidence {'ward': '4B', 'shift_date': '2026-10-27', 'shift_type': 'night', 'required_nurses': 4, 'required_skill': 'cardiac_telemetry', 'available_rostered': 3}
-[FAIL] offer_shift_to_staff(staff_id=S001) [Priya Raman] <memory>  staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
-         evidence {'staff_id': 'S001', 'leave_type': 'annual', 'start_date': '2026-10-26', 'end_date': '2026-10-30', 'status': 'approved'}
 [FAIL] offer_shift_to_staff(staff_id=S003) [Sam Okafor] <planner>  under_weekly_hour_cap: 38h rostered + 10h shift vs 38h cap
          evidence {'staff_id': 'S003', 'weekly_hour_cap': 38, 'rostered_hours': 38}
 [FAIL] offer_shift_to_staff(staff_id=S002) [Tom Becker] <planner>  has_required_skill: missing required skill cardiac_telemetry
@@ -95,6 +95,7 @@ Recalled   1 H-MEM memories
 [PASS] escalate_to_agency() <default> fallback when no internal staff pass
   ok  ward_actually_understaffed: 3 of 4 required nurses available (after approved leave)
   ok  agency_allowed_for_ward: agency allowed
+WITHDRAWN offer_shift_to_staff(staff_id=S001): Shift offer to Priya Raman (S001) withdrawn: staff_not_on_leave (on approved annual leave 2026-10-26 to 2026-10-30).
 FIRED escalate_to_agency(): Agency request raised for 1 nurse: Ward 4B night shift 2026-10-27.
   a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite: staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
 ```
@@ -107,6 +108,7 @@ Recalled   2 H-MEM memories
 [PASS] no_cover_needed() <default> check whether the shift is already covered
   ok  ward_adequately_staffed: 5 of 5 required nurses available (after approved leave)
 FIRED no_cover_needed(): No cover needed: Ward 4B day shift 2026-10-27 is fully staffed. Nobody contacted.
+  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite: ward_actually_understaffed: 5 of 5 required nurses available (after approve…
 ```
 
 **4. `"Ward 9Z needs cover tonight"`: no safe action, so it investigates instead**
@@ -151,12 +153,31 @@ FIRED offer_shift_to_staff(staff_id=S001): Shift offer sent to Priya Raman (S001
 FIRED escalate_to_agency(): Agency request raised for 3 nurses: Ward 4B evening shift 2026-10-27.
 ```
 
-Each offer that fires counts toward the next `ward_actually_understaffed` check ("0 + 1 offered in
-this run of 4"), so Preflight keeps offering until the gap is closed. The agency is asked only for
-the nurses still missing. If nothing else passes, for example when ward policy forbids agency staff,
-the run ends `partially_covered` and reports how many nurses are still missing. Once
-`ward_actually_understaffed` fails (the ward isn't short, or has no demand record), no later candidate
-can pass, so Preflight stops trying (sample 4).
+**6. Sample 2 sent again: nothing is sent twice**
+```
+Recalled   5 H-MEM memories
+           0.50  Ward 4B night cover: escalate_to_agency() passed all checks (ward_actually_understaffed, agency_allo
+           0.46  Ward 4B day cover: no_cover_needed() passed all checks (ward_adequately_staffed) for 2026-10-27.
+           0.45  Ward 4B evening cover: escalate_to_agency() passed all checks (ward_actually_understaffed, agency_al
+           0.38  Ward 4B night cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understaff
+           0.35  Ward 4B evening cover: offer_shift_to_staff(staff_id=S001) passed all checks (ward_actually_understa
+[OPEN] escalate_to_agency() sent in run_f80dbfb96f: re-checked, every check still passes
+STILL OPEN escalate_to_agency (act_5569306bc9): re-checked, every check passes
+ALREADY COVERED by the open actions above. Nothing new sent.
+  a naive agent would have fired offer_shift_to_staff(staff_id=S001) [Priya Raman] despite: staff_not_on_leave: on approved annual leave 2026-10-26 to 2026-10-30
+```
+
+How these work:
+- **Re-checks.** Before planning, every open offer or agency request for the same shift is re-checked
+  through the same gate, as if it were being sent now. If it still passes, it counts as cover (sample 6).
+  If not, it is withdrawn with the evidence (sample 2: Priya's leave was recorded after she was offered
+  the shift).
+- **Whole gap.** Each offer that fires counts toward the next `ward_actually_understaffed` check, so
+  Preflight keeps offering until the gap is closed and asks the agency only for the nurses still
+  missing (sample 5). If nothing else passes, the run ends `partially_covered` with the number still
+  missing.
+- **Early stop.** Once `ward_actually_understaffed` fails, no later candidate can pass, so Preflight
+  stops trying (sample 4).
 
 A request without a ward, date or shift (for example `"someone called in sick"`) is rejected as
 `unparsed` and nothing is done.
@@ -172,13 +193,16 @@ with the app's SQL checks, so a bug in a check would show up as a disagreement. 
 
 | | Preflight | Naive agent (top-ranked pick, no checks) |
 |---|---|---|
-| Actions taken | 2553 | 1200 |
+| Actions taken | 2434 | 1200 |
 | Unsafe actions | **0** | **367 (30.6%)** |
 
 The naive agent's violations by rule: rest gap 122, hour cap 122, booking when the ward was already
 covered 120, on leave 60, missing skill 35. Preflight never used the agency while an eligible
 in-house nurse existed. The first version of this evaluation found it doing so in 12% of runs, which
-led to checking the rest of the staff pool before the agency. `tests/test_safety_eval.py` runs a
+led to checking the rest of the staff pool before the agency. Repeat requests for the same shift
+happen too: 46 were answered "already covered" and 119 open actions were re-checked and kept, and the
+checker confirmed none of them broke a rule. The random worlds don't change between requests, so
+withdrawals are tested by `tests/test_agent.py` rather than this evaluation. `tests/test_safety_eval.py` runs a
 smaller version on every `pytest`.
 
 Limits, stated plainly: the worlds and the checker were written from the same rules spec, so a
@@ -304,8 +328,10 @@ Needs Docker and a local Zetaris instance (see
    date would find no demand. Sample mode never reads the system clock.
 5. Run `python -m app "Ward 4B needs night cover tomorrow"` (scenario A).
 6. Flip to scenario B live: `python scripts/demo_toggle_leave.py on` adds Priya's approved leave in
-   Postgres and reads it back through Zetaris. Run the same request again: Preflight now refuses
-   Priya with the leave row as evidence. `demo_toggle_leave.py off` switches back.
+   Postgres and reads it back through Zetaris. Run the same request again: Preflight re-checks the
+   offer it already sent Priya, withdraws it with the leave row as evidence, and finds other cover.
+   `demo_toggle_leave.py off` switches back. Use `--reset-actions` (and `--reset-memory`) to start
+   the demo over.
 
 If the LLM is unreachable, each call falls back to the rule-based generator and an `llm_fallback`
 event is logged. If Zetaris is unreachable, nothing fires.

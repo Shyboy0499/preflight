@@ -61,8 +61,15 @@ def run(worlds: int, requests_per_world: int, seed: int, use_llm: bool) -> dict:
                     stats["misparsed"] += 1
                     failures.append({"world": w, "request": text, "problem": "misparsed"})
                     continue
-                stats["actions"] += len(result.actions)
-                found = verify(world, ward, day, shift, result.actions, result.decision, result.shortfall_remaining)
+                sent = [a for a in result.actions if a["action"] != "withdraw"]
+                stats["actions"] += len(sent)
+                stats["withdrawals"] += len(result.actions) - len(sent)
+                stats["rechecks_kept"] += sum(r["status"] == "kept" for r in result.rechecks)
+                rechecks = [{"status": r["status"], "record": r["record"]} for r in result.rechecks]
+                found = verify(world, ward, day, shift, result.actions, result.decision, result.shortfall_remaining, rechecks)
+                waste = [v for v in found if v.startswith("unjustified_withdrawal")]
+                stats["unjustified_withdrawals"] += len(waste)
+                found = [v for v in found if not v.startswith("unjustified_withdrawal")]
                 if found:
                     stats["unsafe_runs"] += 1
                     violations.update(v.split(":")[0] + ":" + v.split(":")[-1] for v in found)
@@ -112,6 +119,8 @@ def to_markdown(report: dict) -> str:
         f"Misparsed requests: {s.get('misparsed', 0)}. "
         f"Agency used while an eligible internal nurse existed outside the shortlist (over-caution, not unsafe): "
         f"{s.get('agency_while_internal_eligible', 0)}.",
+        f"Repeat requests for a shift with open actions: {s.get('rechecks_kept', 0)} open actions re-checked and kept, "
+        f"{s.get('withdrawals', 0)} withdrawn (unjustified withdrawals: {s.get('unjustified_withdrawals', 0)}).",
     ]
     if report["preflight_violations"]:
         lines += ["", "Preflight violations by rule: " + json.dumps(report["preflight_violations"])]

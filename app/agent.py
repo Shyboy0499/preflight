@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.actions.executor import fire
+from app.actions.executor import fire, open_actions, withdraw
 from app.actions.library import LIBRARY
 from app.adapters.llm import Generator, make_generator
 from app.adapters.zetaris import DataSourceUnavailable, SqlSource, make_source
@@ -31,7 +31,7 @@ from app.meterless.hmem import (
 )
 from app.meterless.world_model import ContextBuilderService, IngestPipelineService, WorldStoreService
 from app.models import Candidate, ShiftRequest
-from app.planner import plan
+from app.planner import plan, remembered_staff
 from app.preconditions.gate import GateResult, build_params, evaluate
 from app.request_parser import parse_request
 
@@ -49,12 +49,13 @@ class RunResult:
     request_text: str
     request: ShiftRequest | None
     parse_path: str
-    decision: str  # fired | partially_covered | no_safe_action | unverifiable | unparsed
+    decision: str  # fired | partially_covered | already_covered | no_safe_action | unverifiable | unparsed
     summary: str
     fired: dict[str, Any] | None = None  # first action that fired
     actions: list[dict[str, Any]] = field(default_factory=list)  # every action that fired, in order
     shortfall_remaining: int | None = None  # nurses still missing after this run (None if unknown)
     attempts: list[GateResult] = field(default_factory=list)
+    rechecks: list[dict[str, Any]] = field(default_factory=list)  # earlier open actions re-checked: kept / withdrawn
     naive: dict[str, Any] | None = None
     investigation: str | None = None
     memory_trace: dict[str, Any] | None = None
@@ -75,6 +76,7 @@ class RunResult:
             "actions": self.actions,
             "shortfall_remaining": self.shortfall_remaining,
             "attempts": [a.to_dict() for a in self.attempts],
+            "rechecks": [{"record": r["record"], "status": r["status"], "gate": r["gate"].to_dict()} for r in self.rechecks],
             "naive": self.naive,
             "investigation": self.investigation,
             "memory_trace": self.memory_trace,
@@ -201,10 +203,42 @@ class PreflightAgent:
         )
         naive_pick = next((c for c in candidates if c.action == "offer_shift_to_staff"), None)
 
+        # Actions already sent for this shift are re-checked first, through the
+        # same gate, as if sending them now. Still valid: they count as cover.
+        # No longer valid (e.g. new leave): withdrawn, with the evidence.
+        pending, remaining, rechecked_staff = 0, None, set()
+        for record in open_actions(self.cfg.logs_dir / "outbox.jsonl", request):
+            previous = Candidate(record["action"], record["params"], f"re-check of {record['action_id']} sent in {record.get('run_id')}", "open")
+            gate = evaluate(self.source, request, previous, pending_cover=pending)
+            audit.event("recheck", action_id=record["action_id"], **gate.to_dict())
+            rechecked_staff.add(record["params"].get("staff_id"))
+            if gate.passed:
+                nurses = int(record.get("nurses") or 1)
+                pending += nurses
+                remaining = max(0, (gate.shortfall or 0) - nurses)
+                result.rechecks.append({"record": record, "status": "kept", "gate": gate})
+                continue
+            reason = "; ".join(f"{r.name} ({r.explanation})" for r in gate.failed)
+            sid = record["params"].get("staff_id")
+            out = withdraw(record, reason, audit, reader.display_name(sid) if sid else "")
+            audit.event("action_withdrawn", **out)
+            result.actions.append(out)
+            result.rechecks.append({"record": record, "status": "withdrawn", "gate": gate})
+            if sid in remembered_staff(recall.memories, request):
+                self._penalise_recalled(previous, request, gate, recall.trace["trace_id"])
+
+        if pending and remaining == 0:
+            result.decision, result.shortfall_remaining = "already_covered", 0
+            audit.event("stop", reason="shift already covered by open actions that still pass every check")
+            candidates = []
+        elif pending or result.rechecks:
+            # don't re-offer staff just re-checked, and "no cover needed" is moot once cover is in flight
+            candidates = [c for c in candidates
+                          if c.params.get("staff_id") not in rechecked_staff and not (pending and c.action == "no_cover_needed")]
+
         # Fill the whole shortfall: each passing offer covers one nurse and is
         # counted by ward_actually_understaffed on the next gate; the agency
         # request (last) covers whatever is still missing.
-        pending = 0
         for candidate in candidates:
             gate = evaluate(self.source, request, candidate, pending_cover=pending)
             result.attempts.append(gate)
@@ -242,10 +276,14 @@ class PreflightAgent:
             break
         if result.decision == "fired" and result.shortfall_remaining:
             result.decision = "partially_covered"
+        if result.decision == "no_safe_action" and pending and not result.fired:
+            # open actions still cover part of the gap and nothing new passed
+            result.decision = "partially_covered"
+            result.shortfall_remaining = remaining
 
         if naive_pick:
-            naive_gate = next(a for a in result.attempts if a.candidate.key() == naive_pick.key()) if any(
-                a.candidate.key() == naive_pick.key() for a in result.attempts) else None
+            naive_gate = next((a for a in result.attempts if a.candidate.key() == naive_pick.key()), None) \
+                or evaluate(self.source, request, naive_pick)  # shadow only, never fired
             result.naive = {
                 "would_fire": naive_pick.label(),
                 "staff_name": reader.display_name(naive_pick.params["staff_id"]),
@@ -254,7 +292,7 @@ class PreflightAgent:
             }
             audit.event("naive_shadow", **result.naive)
 
-        if result.decision not in ("fired",):
+        if result.decision not in ("fired", "already_covered"):
             any_errors = any(r.status == "error" for a in result.attempts for r in a.results) or not report.complete
             if not result.actions and any_errors and all(any(r.status == "error" for r in a.results) for a in result.attempts):
                 result.decision = "unverifiable"
@@ -288,9 +326,16 @@ class PreflightAgent:
     def _summary(result: RunResult, reader: ContextBuilderService) -> str:
         refused = [a for a in result.attempts if not a.passed and a.candidate.action != "no_cover_needed"]
         lines = []
+        for r in result.rechecks:
+            if r["status"] == "kept":
+                lines.append(f"STILL OPEN {r['record']['action']} ({r['record']['action_id']}): re-checked, every check passes")
         for action in result.actions:
             args = ", ".join(f"{k}={v}" for k, v in action["params"].items())
-            lines.append(f"FIRED {action['action']}({args}): {action['message']}")
+            verb = "WITHDRAWN" if action["action"] == "withdraw" else "FIRED"
+            name = action.get("withdrawn_action", action["action"])
+            lines.append(f"{verb} {name}({args}): {action['message']}")
+        if result.decision == "already_covered":
+            lines.append("ALREADY COVERED by the open actions above. Nothing new sent.")
         if result.decision == "partially_covered":
             lines.append(f"STILL SHORT by {result.shortfall_remaining}: nothing else passed every check. Escalated to the manager with evidence.")
         elif result.decision == "unverifiable":
