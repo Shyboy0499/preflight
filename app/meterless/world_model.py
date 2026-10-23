@@ -317,8 +317,12 @@ class IngestPipelineService:
                 "observations": list(ent.observation_ids),
             })
         s.views[f"staff_pool:{request.ward}:{date_s}:{request.shift_type}"] = sorted(pool, key=lambda p: p["staff_id"])
+        ward = s.entity(request.ward, "ward")  # ward-level facts (name, agency policy) live on the ward entity
+        ward_props = {k: ward.properties.get(k) for k in ("ward_name", "agency_allowed")} if ward else {}
         s.views[f"demand:{request.ward}:{date_s}:{request.shift_type}"] = (
-            {"ward": request.ward, **demand.properties, "observations": list(demand.observation_ids)} if demand else None
+            {"ward": request.ward, **ward_props, **demand.properties,
+             "observations": sorted(set(demand.observation_ids) | set(ward.observation_ids if ward else []))}
+            if demand else None
         )
 
 

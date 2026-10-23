@@ -72,3 +72,12 @@ def test_world_model_ingest_has_provenance_and_projects_staff_pool():
     assert ctx["provenance"] and all(p["query_id"] for p in ctx["provenance"])
     obs = world.observation(pool["S001"]["observations"][0])
     assert obs.sql.startswith("SELECT") and obs.source == "duckdb-sample:scenario_b"
+
+
+def test_world_model_demand_view_carries_ward_policy():
+    request = ShiftRequest("4B", date(2026, 10, 27), "night")
+    world = WorldStoreService()
+    IngestPipelineService(DuckDBSampleSource(DATA / "scenario_a"), world).ingest_scope(request, build_params(request, Candidate("scope")))
+    reader = ContextBuilderService(world)
+    assert reader.demand(request)["agency_allowed"] in (True, "true")
+    assert "agency_allowed=None" not in reader.build_prompt_context(request)["text"]
