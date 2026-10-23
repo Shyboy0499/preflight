@@ -2,7 +2,7 @@
   "name": "Preflight",
   "tagline": "A shift-cover agent that checks before it acts.",
   "hackathon": "GenAI.works Open Agent Hackathon 2026",
-  "track": "Track 3: Reasoning Architecture",
+  "track": "Track 03: Reasoning Architecture",
   "repository": "https://github.com/Shyboy0499/preflight",
   "language": "Python 3.12",
   "entrypoints": {
@@ -34,7 +34,8 @@
         "app/meterless/hmem.py",
         "app/meterless/world_model.py",
         "app/adapters/llm.py"
-      ]
+      ],
+      "evidence": "tests/test_agent.py::test_hmem_memory_changes_what_the_agent_does (H-MEM changes behaviour); live run in docs/live-run-2026-10-23.md"
     },
     "nvidia": {
       "model": "nvidia/nemotron-3.5-lightning-30b-a3b (via NVIDIA_MODEL)",
@@ -57,8 +58,20 @@
   ],
   "evaluation": {
     "method": "200 random synthetic worlds x 6 requests; every action re-checked by an independent oracle (evals/oracle.py)",
-    "preflight_unsafe_actions": "0 of 2434",
-    "naive_unsafe_actions": "367 of 1200 (30.6%)",
+    "preflight": {
+      "actions": 2434,
+      "people_safety_violations": 0,
+      "unnecessary_bookings": 0
+    },
+    "naive_baseline": {
+      "actions": 1200,
+      "people_safety_violations": "278 (23.2%)",
+      "unnecessary_bookings_only": "89 (7.4%)",
+      "any_rule_broken": "367 (30.6%)"
+    },
+    "reproduce": "python -m evals.run_safety_eval --worlds 200 --requests 6",
     "results": "evals/results/latest.md"
-  }
+  },
+  "built_with": "Claude Code; Cursor not used",
+  "live_evidence": "docs/live-run-2026-10-23.md"
 }

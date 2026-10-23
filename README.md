@@ -20,7 +20,30 @@ cover tomorrow"* and:
    still has to pass its checks. A recalled template only changes the order candidates are tried in.
    It never skips a check.
 
-GenAI.works Open Agent Hackathon 2026, Track 3: Reasoning Architecture.
+GenAI.works Open Agent Hackathon 2026, **Track 03: Reasoning Architecture**. Built with Claude Code;
+Cursor not used.
+
+## Judge quick start (sample mode, about a minute, no credentials)
+
+```bash
+git clone https://github.com/Shyboy0499/preflight.git && cd preflight
+python3.12 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
+SAMPLE_MODE=true .venv/bin/python -m app "Ward 4B needs night cover tomorrow" --reset-actions --reset-memory && SAMPLE_MODE=true .venv/bin/python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b
+```
+
+The first run offers the night shift to Priya, and every check passes. The second run is the same
+request after Priya's annual leave has been recorded in the leave system. Preflight re-checks the
+offer it already sent, **withdraws it with the leave row as evidence**, refuses three other nurses
+(hour cap, skill, rest gap), and asks the agency for exactly one nurse. A naive agent would have
+booked Priya.
+
+- **UI:** `SAMPLE_MODE=true .venv/bin/streamlit run ui/streamlit_app.py`. Preflight prepares; you
+  press **Send**.
+- **Tests:** `.venv/bin/pytest` runs 76 tests, including a small version of the safety scoreboard.
+- **The same demo against real Zetaris and NVIDIA Nemotron** (three federated sources), without
+  installing anything: [docs/live-run-2026-10-23.md](docs/live-run-2026-10-23.md)
+- **Scoreboard:** see [Safety evaluation](#safety-evaluation). Preflight has 0 people-safety
+  violations in 1200 random runs; the naive agent has 278.
 
 ## The demo in one picture
 
@@ -48,15 +71,16 @@ source .venv/bin/activate
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow"                          # scenario A
 SAMPLE_MODE=true python -m app "Ward 4B needs night cover tomorrow" --scenario scenario_b     # scenario B
 SAMPLE_MODE=true streamlit run ui/streamlit_app.py                                           # UI
-pytest                                                                                       # 71 tests
+pytest                                                                                       # 76 tests
 ```
 
 `SAMPLE_MODE=true` (the default) swaps Zetaris for DuckDB over `data/sample/<scenario>/*.csv` and the
 LLM for a deterministic rule-based generator. "Today" is fixed at Mon 2026-10-26 to match the
 synthetic data, so "tomorrow" is 2026-10-27.
 
-CLI options: `--scenario scenario_a|scenario_b`, `--json` (full run as JSON), `--reset-memory`
-(forget learned H-MEM memories).
+CLI options: `--scenario scenario_a|scenario_b`, `--json` (full run as JSON), `--verbose` (every
+check), `--reset-memory` (forget learned H-MEM memories), `--reset-actions` (archive open actions).
+`scripts/demo_reset.sh --sample` does both resets.
 
 ## Sample inputs and outputs
 
@@ -194,10 +218,14 @@ with the app's SQL checks, so a bug in a check would show up as a disagreement. 
 | | Preflight | Naive agent (top-ranked pick, no checks) |
 |---|---|---|
 | Actions taken | 2434 | 1200 |
-| Unsafe actions | **0** | **367 (30.6%)** |
+| **People-safety violations** (on leave, missing skill, over hours, rest gap) | **0** | **278 (23.2%)** |
+| Unnecessary bookings only (ward already covered) | 0 | 89 (7.4%) |
+| Any rule broken | 0 | 367 (30.6%) |
 
-The naive agent's violations by rule: rest gap 122, hour cap 122, booking when the ward was already
-covered 120, on leave 60, missing skill 35. Preflight never used the agency while an eligible
+The headline is people-safety, meaning someone who shouldn't work that shift gets booked.
+Unnecessary bookings are counted separately; 31 naive bookings were both unnecessary and unsafe, so
+they count under people-safety. The naive agent's violations by rule: rest gap 122, hour cap 122,
+booking when the ward was already covered 120, on leave 60, missing skill 35. Preflight never used the agency while an eligible
 in-house nurse existed. The first version of this evaluation found it doing so in 12% of runs, which
 led to checking the rest of the staff pool before the agency. Repeat requests for the same shift
 happen too: 46 were answered "already covered" and 119 open actions were re-checked and kept, and the
@@ -208,6 +236,34 @@ smaller version on every `pytest`.
 Limits, stated plainly: the worlds and the checker were written from the same rules spec, so a
 misunderstanding of a rule would show up in both. The default run uses the rule-based generator.
 Add `--llm` to put NVIDIA Nemotron in the loop; that run is slower and uses the network.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph sources [Three source systems]
+    F[CSV file source<br/>roster, demand, staff, wards]
+    P[(Postgres<br/>leave system)]
+    R[REST service<br/>staff skills]
+  end
+  F --> Z
+  P --> Z
+  R --> Z
+  Z[Zetaris<br/>federated, read-only SQL]
+  Z -->|facts + provenance| WM[World Model<br/>Meterless]
+  Z -->|evidence rows| G{Precondition gate<br/>SQL checks, fail closed}
+  U([Manager: plain-English request]) --> N
+  H[H-MEM<br/>Meterless: library + learned actions] -->|recalled memories| N
+  WM -->|context| N[NVIDIA Nemotron<br/>parse, rank, explain]
+  N -->|candidates| G
+  G -->|every check passes| O[Outbox<br/>offer / agency / withdraw / amend]
+  G -->|a check fails| X[Refusal with evidence<br/>next candidate or investigation]
+  O -->|open actions re-checked| G
+  O -->|learn| H
+  G --> L[(logs/*.jsonl<br/>audit trail)]
+```
+
+The LLM only proposes. Only SQL evidence from Zetaris lets an action fire.
 
 ## How it works
 
@@ -249,10 +305,17 @@ request ─► parse (generator, validated; rule fallback)
 - **Read-only data access.** One statement per call, no semicolons, `SELECT`/`WITH`/`SHOW`/`DESCRIBE`
   only, and parameters rendered as typed literals from validated values. This follows the Zetaris
   `AGENTS.md` rules.
+- **The manager sends (UI).** In the Streamlit UI, actions that pass every check are prepared with a
+  **Send** / **Discard** step (simulated delivery). The CLI and the evaluation send automatically.
+- **Warnings, not blocks.** A pending (unapproved) leave request overlapping the shift is shown as a
+  warning on the action and never blocks it. An over-sized agency request is trimmed when a re-check
+  finds fewer nurses missing.
 - **Privacy.** Staff names never go to the LLM; prompts use IDs only. `LLM_BASE_URL` can point at a
   local server that uses the same API, so prompts stay on the machine.
 
 ## Sponsor technology, and where it is used
+
+Built with **Claude Code**. Cursor was not used.
 
 ### Zetaris (all facts and every check)
 `app/adapters/zetaris.py` → `ZetarisRestSource` calls the Zetaris direct REST API:

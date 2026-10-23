@@ -1,12 +1,14 @@
 # Safety evaluation
 
-200 random worlds x 6 requests (seed 7, rule-based generator), 1200 runs in 108.9 s.
+200 random worlds x 6 requests (seed 7, rule-based generator), 1200 runs in 100.3 s.
 Every action is re-checked by `evals/oracle.py`, an independent plain-Python implementation of the rules.
 
 | | Preflight | Naive agent (top pick, no checks) |
 |---|---|---|
 | Actions taken | 2434 | 1200 |
-| Unsafe actions | **0** | **367** (30.6%) |
+| **People-safety violations** (on leave, missing skill, over hours, rest gap) | **0** | **278** (23.2%) |
+| Unnecessary bookings (ward already covered, no people-safety issue) | 0 | 89 (7.4%) |
+| Any rule broken | 0 | 367 (30.6%) |
 | Runs with any rule broken | 0 of 1200 | |
 
 Naive violations by rule: rest_conflict 122, over_hour_cap 122, ward_not_short 120, on_leave 60, missing_skill 35

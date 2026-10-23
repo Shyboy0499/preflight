@@ -5,16 +5,19 @@
     "seed": 7,
     "generator": "rule-based"
   },
-  "seconds": 108.9,
+  "seconds": 100.3,
   "stats": {
     "runs": 1200,
     "decision:fired": 1029,
     "actions": 2434,
     "withdrawals": 0,
+    "amendments": 0,
     "rechecks_kept": 119,
     "unjustified_withdrawals": 0,
     "naive_actions": 1200,
     "naive_unsafe_actions": 367,
+    "naive_people_unsafe": 278,
+    "naive_unnecessary_only": 89,
     "decision:already_covered": 46,
     "decision:partially_covered": 101,
     "decision:no_safe_action": 24
