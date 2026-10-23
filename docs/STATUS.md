@@ -1,6 +1,6 @@
 # Preflight: status handoff
 
-Updated 2026-10-24 (review round 2, in progress) by the Claude Code session building the repo. Rewritten and
+Updated 2026-10-23 (round 2: roles, Nightshift client, demo video) by the Claude Code session building the repo. Rewritten and
 pushed after each milestone. No secrets here: `.env.local` holds them and is gitignored.
 Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03: Reasoning Architecture**.
 
@@ -29,10 +29,12 @@ Deadline: **27 Oct 2026 23:45 UTC** (Wed 28 Oct 10:45 Sydney). Track: **Track 03
 | **Review round 1:** judge quick start, Mermaid architecture, `docs/live-run-2026-10-23.md`, `scripts/demo_reset.sh`, split scoreboard, track and Cursor facts | `29414eb` |
 | **Round 2:** four named roles (Planner, Verifier, Investigator, Memory) in `app/agents.py`; `role` on every trace event; Verifier refusals go back to the Planner for one re-plan before backfill and agency | `8e87c4d` |
 | **Round 2:** Meterless Nightshift as the primary AI provider (runtime contract: bearer token, `meterless-app` header, `meterless/auto`, 180 s, `/v1/models` status); NVIDIA direct only as a fallback; `--provider-status` | `18e265c` |
+| **Round 2:** World Model demand view now carries the ward's agency policy (was `agency_allowed=None`; found while recording) | `5702ce3` |
+| **Round 2:** AI-generated demo video tooling (`scripts/video/`) and narration (`demo/script.md`) | `e4ade39`, latest |
 
 ## 2. Current state
 
-- **Tests:** `pytest` → `96 passed, 1 warning` (2026-10-24, local).
+- **Tests:** `pytest` → `97 passed, 1 warning` (2026-10-23, local).
 - **Judge quick start** (README, 3 commands): cloned from GitHub into a clean environment, it ran in
   **50 s** and printed the expected A → withdraw → agency output.
 - **Sample mode** (DuckDB + rule-based generator) runs end to end and needs no credentials.
@@ -114,16 +116,17 @@ The naive baseline is now exactly "the Planner's round-1 top pick", which moved 
 
 ## 8. Next
 
-- **Blocked on the user:**
-  - install Meterless Nightshift (Mac M1+ edition; this Mac has an M5);
-  - add the NVIDIA key inside Nightshift;
-  - set `METERLESS_RUNTIME_TOKEN` in `.env.local`;
-  - optionally put the HackOS Participant Setup Guide PDF in a gitignored folder.
-
-  Then: `--provider-status` reports ONLINE, plus a live A/B run through Nightshift.
-- **Demo video (AI-generated, round 2 item 3)** needs:
-  - an installed Enhanced/Premium English voice;
-  - Playwright (dev-only);
-  - a one-time Zetaris UI login saved as Playwright storage state, done by the user so no password
-    is typed on camera.
+- **Demo video done: `demo/preflight-demo.mp4`** (gitignored; upload it with the submission). 3:02,
+  1080p30, 14 scenes in Demo Video Guide order.
+  - Voice: Karen (Premium), sped up 8% with pitch preserved. Captions are burned in. Narration is in
+    `demo/script.md`.
+  - Live runs: real Streamlit UI, real Zetaris (3 sources) and NVIDIA Nemotron called directly; it says
+    so on screen. Nightshift was not used.
+  - Waits are sped up; nothing is staged. Rebuild: `scripts/video/` (record_ui A/B,
+    record_explorer, make_cards, storyboard, build).
+  - Not shown: the Investigator (this run never needed it), a third "already covered" run, and the
+    live safety eval (the scoreboard card reads `evals/results/latest.md`).
+- **Blocked on the user (optional):** install Nightshift and set `METERLESS_RUNTIME_TOKEN` to prove the
+  primary provider live. Until then, live mode uses the documented NVIDIA-direct fallback.
+- The demo state is reset (leave off, no open actions, memory cleared).
 - Keep this file updated and pushed after each milestone.
