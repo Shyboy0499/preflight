@@ -49,16 +49,20 @@ def narrate(sid: str, text: str) -> tuple[Path, float]:
 
 
 def caption_chunks(text: str) -> list[str]:
+    """Split narration into chunks that each fit the two-line caption bar (84 chars per line)."""
+    import textwrap
+
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     chunks: list[str] = []
     for s in sentences:
-        words, cur = s.split(), ""
-        for w in words:
-            if len(cur) + len(w) + 1 > 150:
+        cur = ""
+        for w in s.split():
+            trial = f"{cur} {w}".strip()
+            if len(textwrap.wrap(trial, 84)) > 2:
                 chunks.append(cur)
                 cur = w
             else:
-                cur = f"{cur} {w}".strip()
+                cur = trial
         if cur:
             chunks.append(cur)
     return chunks

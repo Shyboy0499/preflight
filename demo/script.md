@@ -30,7 +30,9 @@ AI-generated: voice-over by macOS `say -v "Karen (Premium)"`; screen recording b
 
 ## Zetaris and Meterless
 
-**11_zetaris_sql** (image): Zetaris federates three sources: a CSV file source for rosters and demand, a Postgres leave system, and a REST skills service. One check joins the demand, roster and leave tables across two of them in a single SQL statement.
+**10_zetaris_ui** (frames): Zetaris federates three sources here: a CSV file source for rosters and demand, a Postgres leave system, and a REST skills service.
+
+**11_zetaris_sql** (image): One check, ward actually understaffed, joins the demand, roster and leave tables across two of those sources in a single SQL statement, sent to Zetaris over REST.
 
 **12_meterless** (frames): Meterless does real work too. H-MEM recalled that Priya had covered this shift, and lowered its confidence when the Verifier refused her. The World Model holds the facts pulled from Zetaris, fifty-five observations from five queries, each with its provenance.
 
