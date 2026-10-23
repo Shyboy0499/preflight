@@ -11,7 +11,9 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app", description="Preflight: a shift-cover agent that checks before it acts.")
-    parser.add_argument("request", help='e.g. "Ward 4B needs night cover tomorrow"')
+    parser.add_argument("request", nargs="?", help='e.g. "Ward 4B needs night cover tomorrow"')
+    parser.add_argument("--provider-status", action="store_true",
+                        help="check the Meterless Nightshift runtime (GET /v1/models) and exit; never prints the token")
     parser.add_argument("--scenario", help="sample data folder under data/sample (SAMPLE_MODE only)")
     parser.add_argument("--json", action="store_true", help="print the full run as JSON")
     parser.add_argument("--reset-memory", action="store_true", help="forget learned H-MEM memories before running")
@@ -32,6 +34,17 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
+    if args.provider_status:
+        from app.adapters.llm import provider_status
+
+        st = provider_status(cfg)
+        print(f"Meterless Nightshift at {st['base_url']}: {st['status'].upper()} ({st['detail']})"
+              f"  token {'set' if cfg.meterless_token else 'NOT SET'}  model {cfg.meterless_model}")
+        if st["models"]:
+            print("  routing modes: " + ", ".join(st["models"]))
+        return 0 if st["status"] == "online" else 1
+    if not args.request:
+        parser.error("a request is required (or --provider-status)")
     if args.reset_memory:
         shutil.rmtree(cfg.state_dir, ignore_errors=True)
     outbox = cfg.logs_dir / "outbox.jsonl"

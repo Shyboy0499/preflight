@@ -367,17 +367,29 @@ project. The World Model docs name the contracts `IngestPipeline` and `ReadSurfa
 `IngestPipelineService` and `ContextBuilderService`. Not implemented: H-MEM mining, dreaming, sleep
 and conflict detection, and World Model enrichment and control plane.
 
-### NVIDIA Nemotron (the generator)
+### Meterless Nightshift (the AI provider) and NVIDIA Nemotron (the model)
 The **generator pattern** is in `app/adapters/llm.py`. One `generator(prompt, system_prompt)` is the
-only place a model is called. It goes to NVIDIA's OpenAI-compatible endpoint
-(`https://integrate.api.nvidia.com/v1`), with the model from `NVIDIA_MODEL`. Nemotron does three
-jobs, and none of them can let an action through on its own:
+only place a model is called. In live mode, every call goes to **Meterless Nightshift**, the local
+OpenAI-compatible runtime (`LLM_BASE_URL`, default `http://127.0.0.1:8088/v1`). Our app sends:
+- the bearer runtime token (`METERLESS_RUNTIME_TOKEN`);
+- `meterless-app: preflight` and `meterless-scope: user`;
+- a routing-mode model id (`METERLESS_MODEL`, default `meterless/auto`);
+- a 180 s timeout, as the Meterless provider contract requires.
 
-| Job | Where | What Nemotron does |
+The NVIDIA key lives inside Nightshift, not in this app. `python -m app --provider-status` checks the
+runtime (`GET /v1/models`: online, unauthorized or offline) without printing the token.
+
+**Fallback order:** Nightshift → NVIDIA direct (`NVIDIA_API_KEY`/`NVIDIA_MODEL`, documented fallback
+only) → the rule-based generator. Each fallback is logged as an `llm_fallback` trace event.
+
+The model (Nemotron) does three jobs as the Planner and Investigator, and none of them can let an
+action through on its own:
+
+| Job | Where | What the model does |
 |---|---|---|
 | Parse the request | `app/request_parser.py` | Free text → `{ward, shift_date, shift_type}` JSON, then validated |
-| Plan candidates | `app/planner.py` | Ranks staff using World Model facts and H-MEM memories; unknown staff or actions are dropped |
-| Investigate | `app/agent.py` | When nothing passes, explains the refusals for the manager |
+| Plan and re-plan candidates | `app/planner.py` | Ranks staff using World Model facts and H-MEM memories, then re-ranks once from the Verifier's refusals; unknown staff or actions are dropped |
+| Investigate | `app/agents.py` | When nothing passes, explains the refusals for the manager |
 
 Model choice, from a test on 2026-10-22 running both scenarios through these tasks:
 `nvidia/nemotron-3.5-lightning-30b-a3b` returned valid JSON on every call, about 5 s per full run,
@@ -412,7 +424,8 @@ Needs Docker and a local Zetaris instance (see
 If the LLM is unreachable, each call falls back to the rule-based generator and an `llm_fallback`
 event is logged. If Zetaris is unreachable, nothing fires.
 
-Verified live on 2026-10-23 (local Zetaris 2.4.3, `nvidia/nemotron-3.5-lightning-30b-a3b`): scenario A
+Verified live on 2026-10-23 (local Zetaris 2.4.3, `nvidia/nemotron-3.5-lightning-30b-a3b` called via NVIDIA
+direct, before the Nightshift provider was added): scenario A
 offers to Priya in about 8 s; after `demo_toggle_leave.py on`, the same request withdraws that offer
 with the Postgres leave row as evidence and raises one agency request in about 14 s. Each candidate's
 checks run concurrently against Zetaris.

@@ -150,29 +150,87 @@ class EmptyReply(RuntimeError):
     """The model returned no usable content (e.g. reasoning used up the token budget)."""
 
 
-def openai_compatible_generator(cfg: Config) -> Generator:
+METERLESS_APP_ID = "preflight"  # sent as the meterless-app header on every request
+
+
+def normalize_meterless_url(url: str) -> str:
+    """Any pasted Nightshift URL -> <host>/v1 (contract: never /v1/v1)."""
+    u = url.strip().rstrip("/")
+    if "://" not in u:
+        u = "http://" + u
+    for suffix in ("/chat/completions", "/models", "/healthz"):
+        if u.endswith(suffix):
+            u = u[: -len(suffix)]
+    u = u.rstrip("/")
+    while u.endswith("/v1/v1"):
+        u = u[:-3]
+    return u if u.endswith("/v1") else u + "/v1"
+
+
+def _chat_generator(base_url: str, api_key: str, model: str, timeout: float, max_tokens: int,
+                    extra_body: dict | None = None, headers: dict | None = None) -> Generator:
     from openai import OpenAI
 
-    client = OpenAI(base_url=cfg.llm_base_url, api_key=cfg.llm_api_key, timeout=cfg.llm_timeout_s, max_retries=1)
-    # Nemotron reasoning models spend the whole budget on hidden reasoning for
-    # these short structured tasks unless thinking is switched off.
-    extra_body = None if cfg.llm_reasoning else {"chat_template_kwargs": {"enable_thinking": False}}
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=1, default_headers=headers or None)
 
     def generate(prompt: str, system_prompt: str) -> str:
         reply = client.chat.completions.create(
-            model=cfg.llm_model,
+            model=model,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=cfg.llm_max_tokens,
+            max_tokens=max_tokens,
             extra_body=extra_body,
         )
         choice = reply.choices[0]
         text = THINK_BLOCK.sub("", choice.message.content or "").strip()
         if not text:
-            raise EmptyReply(f"empty reply from {cfg.llm_model} (finish_reason={choice.finish_reason})")
+            raise EmptyReply(f"empty reply from {model} (finish_reason={choice.finish_reason})")
         return text
 
     return generate
+
+
+def meterless_generator(cfg: Config) -> Generator:
+    """Primary provider: Meterless Nightshift runtime. Bearer runtime token, meterless-app
+    header, routing-mode model id (meterless/auto by default), plain text requests."""
+    return _chat_generator(
+        normalize_meterless_url(cfg.llm_base_url), cfg.meterless_token, cfg.meterless_model,
+        cfg.llm_timeout_s, cfg.llm_max_tokens,
+        headers={"meterless-app": METERLESS_APP_ID, "meterless-scope": "user"},
+    )
+
+
+def nvidia_generator(cfg: Config) -> Generator:
+    """Documented fallback: NVIDIA's OpenAI-compatible endpoint, called directly."""
+    # Nemotron reasoning models spend the whole budget on hidden reasoning for
+    # these short structured tasks unless thinking is switched off.
+    extra_body = None if cfg.llm_reasoning else {"chat_template_kwargs": {"enable_thinking": False}}
+    return _chat_generator(cfg.nvidia_base_url, cfg.llm_api_key, cfg.llm_model, min(cfg.llm_timeout_s, 60),
+                           cfg.llm_max_tokens, extra_body=extra_body)
+
+
+openai_compatible_generator = nvidia_generator  # backwards-compatible name
+
+
+def provider_status(cfg: Config, client=None) -> dict[str, Any]:
+    """Meterless contract: GET /v1/models decides. 200 with meterless/* ids -> online,
+    401/403 -> unauthorized, anything else -> offline. Never returns the token."""
+    import httpx
+
+    url = normalize_meterless_url(cfg.llm_base_url)
+    headers = {"Authorization": f"Bearer {cfg.meterless_token}", "meterless-app": METERLESS_APP_ID}
+    try:
+        r = (client or httpx).get(f"{url}/models", headers=headers, timeout=10)
+    except Exception as exc:  # connection refused, timeout, DNS
+        return {"provider": "meterless", "base_url": url, "status": "offline", "detail": type(exc).__name__, "models": []}
+    if r.status_code in (401, 403):
+        return {"provider": "meterless", "base_url": url, "status": "unauthorized", "detail": f"HTTP {r.status_code}", "models": []}
+    try:
+        ids = [m.get("id", "") for m in r.json().get("data", [])] if r.status_code == 200 else []
+    except ValueError:
+        ids = []
+    status = "online" if any(i.startswith("meterless/") for i in ids) else "offline"
+    return {"provider": "meterless", "base_url": url, "status": status, "detail": f"HTTP {r.status_code}", "models": ids}
 
 
 def with_fallback(primary: Generator, fallback: Generator, on_fallback: Callable[[str], None]) -> Generator:
@@ -187,6 +245,24 @@ def with_fallback(primary: Generator, fallback: Generator, on_fallback: Callable
 
 
 def make_generator(cfg: Config, on_fallback: Callable[[str], None]) -> tuple[Generator, str]:
-    if cfg.sample_mode or not cfg.llm_configured:
+    """Live: Meterless Nightshift first, then NVIDIA direct (documented fallback), then rules.
+    SAMPLE_MODE always uses the rule-based generator."""
+    if cfg.sample_mode:
         return rule_based_generator, "rule-based"
-    return with_fallback(openai_compatible_generator(cfg), rule_based_generator, on_fallback), f"openai-compatible:{cfg.llm_model}"
+    chain: list[tuple[str, Generator]] = []
+    if cfg.meterless_token:
+        if "nvidia.com" in cfg.llm_base_url:
+            from app.config import ConfigError
+
+            raise ConfigError("LLM_BASE_URL points at NVIDIA but METERLESS_RUNTIME_TOKEN is set: point LLM_BASE_URL at "
+                              "Nightshift (default http://127.0.0.1:8088/v1); NVIDIA direct uses NVIDIA_BASE_URL.")
+        chain.append((f"meterless:{cfg.meterless_model}", meterless_generator(cfg)))
+    if cfg.llm_configured:
+        chain.append((f"nvidia-direct:{cfg.llm_model}", nvidia_generator(cfg)))
+    if not chain:
+        return rule_based_generator, "rule-based"
+    generator: Generator = rule_based_generator
+    for name, gen in reversed(chain):
+        generator = with_fallback(gen, generator, lambda note, n=name: on_fallback(f"{n} failed: {note}"))
+    fallbacks = [n.split(":")[0] for n, _ in chain[1:]] + ["rule-based"]
+    return generator, f"{chain[0][0]} (fallback: {' -> '.join(fallbacks)})"

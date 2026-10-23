@@ -51,6 +51,10 @@ class Config:
     llm_timeout_s: float
     llm_reasoning: bool
     llm_max_tokens: int
+    # Primary LLM provider: Meterless Nightshift runtime (OpenAI-compatible, local).
+    meterless_token: str = ""
+    meterless_model: str = "meterless/auto"
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"  # NVIDIA-direct fallback only
 
     @property
     def llm_configured(self) -> bool:
@@ -106,10 +110,14 @@ def load_config(**overrides) -> Config:
         zetaris_table_prefix=env("ZETARIS_TABLE_PREFIX") or "preflight",
         zetaris_tables=table_map(env("ZETARIS_TABLE_PREFIX") or "preflight", env("ZETARIS_TABLES") or ""),
         zetaris_timeout_s=float(env("ZETARIS_TIMEOUT_S") or 15),
+        # NVIDIA direct is the documented fallback; the primary provider is Nightshift.
         llm_api_key=env("NVIDIA_API_KEY") or "",
         llm_model=env("NVIDIA_MODEL") or "",
-        llm_base_url=env("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1",
-        llm_timeout_s=float(env("LLM_TIMEOUT_S") or 30),
+        llm_base_url=env("LLM_BASE_URL") or "http://127.0.0.1:8088/v1",
+        llm_timeout_s=float(env("LLM_TIMEOUT_S") or 180),  # Meterless contract: a cold model load can take minutes
+        meterless_token=env("METERLESS_RUNTIME_TOKEN") or "",
+        meterless_model=env("METERLESS_MODEL") or "meterless/auto",
+        nvidia_base_url=env("NVIDIA_BASE_URL") or "https://integrate.api.nvidia.com/v1",
         llm_reasoning=_flag("LLM_REASONING", False),
         llm_max_tokens=int(env("LLM_MAX_TOKENS") or 2048),
     )
