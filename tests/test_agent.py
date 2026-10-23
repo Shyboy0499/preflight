@@ -261,3 +261,29 @@ def test_new_leave_withdraws_the_open_offer_with_evidence_and_recovers(make_agen
     assert [r["action"] for r in outbox] == ["offer_shift_to_staff", "withdraw", "escalate_to_agency"]
     # and the next request sees the agency request as cover
     assert make_agent("scenario_b").run(NIGHT).decision == "already_covered"
+
+
+def test_hmem_memory_changes_what_the_agent_does(make_agent):
+    """H-MEM is load-bearing: identical data and LLM output, different behaviour with memory.
+
+    The generator always ranks Tom (S002, lacks the required skill) first. Without memory the
+    agent tries Tom, is refused, and only reaches Priya by backfill. With a memory learned from
+    an earlier successful run, it goes to Priya first and never contacts Tom.
+    """
+    def ranks_tom_first(prompt, system_prompt):
+        if "plan_candidates" in system_prompt:
+            return '{"candidates": [{"action": "offer_shift_to_staff", "params": {"staff_id": "S002"}}]}'
+        from app.adapters.llm import rule_based_generator
+        return rule_based_generator(prompt, system_prompt)
+
+    without = make_agent("scenario_a", logs="no_mem", generator=ranks_tom_first).run(NIGHT)  # empty memory
+
+    make_agent("scenario_a", logs="learn").run(NIGHT)  # a run that fires: H-MEM learns "4B night -> S001"
+    with_memory = make_agent("scenario_a", logs="with_mem", generator=ranks_tom_first).run(NIGHT)
+
+    offers = lambda r: [a.candidate.params["staff_id"] for a in r.attempts if a.candidate.action == "offer_shift_to_staff"]
+    assert offers(without)[:2] == ["S002", "S001"]  # tried Tom, refused; Priya via backfill
+    assert offers(with_memory) == ["S001"]  # memory: straight to Priya, Tom never contacted
+    assert without.fired["params"] == with_memory.fired["params"] == {"staff_id": "S001"}
+    assert any(m["content"].startswith("Ward 4B night cover") for m in with_memory.memory_trace["returned"])
+    assert without.memory_trace["returned"] == []
