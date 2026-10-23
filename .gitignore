@@ -14,3 +14,7 @@ logs/*
 .skillpilot/
 .DS_Store
 .env.local
+
+# Demo video build (only the narration script is committed)
+demo/*
+!demo/script.md
