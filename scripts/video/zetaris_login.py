@@ -13,15 +13,14 @@ STATE, FLAG = AUTH / "zetaris.json", AUTH / "SAVE"
 
 
 def logged_in(page) -> bool:
+    """Zetaris keeps the session in cookies: signed in = off the login page with no password box."""
     url = page.url.lower()
-    if "login" in url or "signin" in url or "auth" in url:
+    if "login" in url or "signin" in url:
         return False
     try:
-        has_storage = page.evaluate("() => Object.keys(window.localStorage).length > 0")
-        has_password_box = page.locator("input[type=password]").count() > 0
+        return page.locator("input[type=password]").count() == 0 and page.get_by_text("Data Explorer").count() > 0
     except Exception:
         return False
-    return has_storage and not has_password_box
 
 
 with sync_playwright() as p:

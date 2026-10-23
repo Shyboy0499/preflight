@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1920, 1080
+W, H = 1920, 960  # footage area; a fixed 120 px caption strip sits below it in the final frame
 SANS = "/System/Library/Fonts/Avenir Next.ttc"
 MONO = "/System/Library/Fonts/Menlo.ttc"
 INK, MUTED, ACCENT, BG, CODE_BG = (17, 24, 39), (90, 100, 115), (220, 38, 38), (250, 250, 248), (17, 24, 39)
@@ -59,13 +59,19 @@ def code_card(path: Path, heading: str, lines: list[str], note: str = "", size: 
     d.rounded_rectangle([90, 160, W - 90, 770], radius=18, fill=CODE_BG)  # leaves room for the caption bar
     y = 190
     f = font(size, mono=True)
+    max_chars = int(1680 / (0.602 * size))  # Menlo advance is ~0.6 em: wrap instead of truncating
+    wrapped: list[str] = []
+    for ln in lines:
+        parts = textwrap.wrap(ln, max_chars, subsequent_indent="    ", break_on_hyphens=False) or [""]
+        wrapped += parts
+    lines = wrapped
     for ln in lines:
         colour = (134, 239, 172) if "verifier" in ln and ("PASS" in ln or "fired" in ln) else (229, 231, 235)
         if "planner" in ln:
             colour = (147, 197, 253)
         if "FAIL" in ln or "withdraw" in ln:
             colour = (252, 165, 165)
-        d.text((130, y), ln[:118], font=f, fill=colour)
+        d.text((130, y), ln, font=f, fill=colour)
         y += int(size * 1.55)
         if y > 730:
             break

@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 
 HAS_EXPLORER = (Path("demo/frames/explorer/timeline.json")).exists()
+IMPACT_LINE = ("For a ward manager, that means a safe cover plan in under a minute, and every no comes with the record "
+               "that proves it.")
 
 scenes = [
     # 1. Problem + track
@@ -32,23 +34,25 @@ scenes = [
     # 4. Live run
     {"id": "06_run_a", "section": "Live run", "visual": {"type": "frames", "dir": "demo/frames/A",
                                                          "tags": ["intro", "typed", "running", "outcome", "verifier", "send", "sent"],
-                                                         "fast_tags": ["running", "running:done"], "fast_max": 2.5},
+                                                         "fast_tags": ["running"], "fast_max": 2.5},
      "narration": "Now a live run, on real Zetaris and NVIDIA Nemotron. Ward 4B needs night cover tomorrow. The Planner proposes "
                   "Priya. The Verifier runs six checks across three systems: understaffing, leave, skill, hours, rest, and pending "
                   "leave. All of them pass, so Preflight prepares the offer, and the manager presses Send."},
     {"id": "07_toggle", "section": "Live run", "visual": {"type": "image", "path": "demo/assets/toggle.png"},
      "narration": "Then HR approves Priya's annual leave, in the Postgres leave system."},
     {"id": "08_run_b", "section": "Live run", "visual": {"type": "frames", "dir": "demo/frames/B",
-                                                         "tags": ["typed", "running", "outcome", "recheck"],
-                                                         "fast_tags": ["running", "running:done"], "fast_max": 2.5},
+                                                         "tags": ["typed", "running", "recheck", "outcome"],
+                                                         "fast_tags": ["running"], "fast_max": 2.0,
+                                                         "keep_real": ["recheck"]},
      "narration": "Same request again. First, Preflight re-checks the offer it already sent. Priya is now on approved leave, so "
                   "the offer is withdrawn, with the leave record as evidence. A naive agent that books its top pick would have "
                   "sent her anyway."},
     {"id": "09_run_b_verifier", "section": "Live run", "visual": {"type": "frames", "dir": "demo/frames/B",
                                                                   "tags": ["verifier", "send", "sent"]},
-     "narration": "The Planner's next picks are refused for real reasons. Tom lacks the cardiac skill, and Raj, Kai and Noor "
-                  "would not get ten hours' rest. Those reasons go back to the Planner, its re-plan is refused on the same rest "
-                  "rule, and Sam is at his hour cap. So Preflight asks the agency for exactly one nurse."},
+     "narration": "The Planner's next picks are refused for real reasons. Tom lacks the cardiac skill, Sam is at his hour "
+                  "cap, and Raj would not get ten hours' rest. Those three reasons go back to the Planner. Its re-plan, and "
+                  "the rest of the pool, are refused on the same rest rule. So Preflight asks the agency for exactly one "
+                  "nurse."},
 ]
 # 5. Zetaris and Meterless doing real work
 if HAS_EXPLORER:
@@ -71,6 +75,9 @@ scenes += [
                   "when the Verifier refused her. The World Model holds the facts pulled from Zetaris, fifty-five observations "
                   "from five queries, each with its provenance."},
     # 6. Output and impact
+    {"id": "13a_impact_line", "section": "Output and impact", "visual": {"type": "frames", "dir": "demo/frames/B",
+                                                                           "tags": ["sent"]},
+     "narration": IMPACT_LINE},
     {"id": "13_impact", "section": "Output and impact", "visual": {"type": "image", "path": "demo/assets/scoreboard.png"},
      "narration": "To measure reliability, we sent twelve hundred random requests across two hundred synthetic hospital worlds, "
                   "and re-checked every action with an independent checker. Preflight made zero people-safety violations. A "

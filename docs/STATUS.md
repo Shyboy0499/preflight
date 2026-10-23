@@ -116,16 +116,20 @@ The naive baseline is now exactly "the Planner's round-1 top pick", which moved 
 
 ## 8. Next
 
-- **Demo video done: `demo/preflight-demo.mp4`** (gitignored; upload it with the submission). 3:02,
-  1080p30, 14 scenes in Demo Video Guide order.
-  - Voice: Karen (Premium), sped up 8% with pitch preserved. Captions are burned in. Narration is in
-    `demo/script.md`.
-  - Live runs: real Streamlit UI, real Zetaris (3 sources) and NVIDIA Nemotron called directly; it says
-    so on screen. Nightshift was not used.
-  - Waits are sped up; nothing is staged. Rebuild: `scripts/video/` (record_ui A/B,
-    record_explorer, make_cards, storyboard, build).
-  - Not shown: the Investigator (this run never needed it), a third "already covered" run, and the
-    live safety eval (the scoreboard card reads `evals/results/latest.md`).
+- **Demo video v2 done: `demo/preflight-demo.mp4`** (gitignored; upload it with the submission). 3:10,
+  1080p30, 15 scenes in Demo Video Guide order. Narration: `demo/script.md`.
+  - v2 changes, from review:
+    - recorded at 4K with smooth pan-and-zoom onto the narrated region (body text about 28 px);
+    - a fixed 120 px caption strip, so captions never cover footage;
+    - a 4.5 s real hold on the "Withdrawn: Priya … approved annual leave" banner and the leave row,
+      then the naive column next to it;
+    - the toggle card wraps, trace line 7 is shortened, and the impact line was added.
+  - Live takes: A (`run_99d013b277`, 7.4 s) and B (`run_d1c05ce47b`, 31.7 s). In B, Memory recalls
+    Priya and her offer is withdrawn. The Verifier then refuses Tom (skill), Sam (hour cap) and Raj
+    (rest), and the re-plan's Kai, Noor, Ellie and Omar plus backfill Zoe (rest). Agency for 1.
+  - The impact line says "under a minute", not "under thirty seconds": live B took 31.7 s.
+  - Not shown: the Investigator, a third "already covered" run, and the live eval (the scoreboard
+    reads `evals/results/latest.md`).
 - **Blocked on the user (optional):** install Nightshift and set `METERLESS_RUNTIME_TOKEN` to prove the
   primary provider live. Until then, live mode uses the documented NVIDIA-direct fallback.
 - The demo state is reset (leave off, no open actions, memory cleared).

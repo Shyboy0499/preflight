@@ -1,10 +1,12 @@
-"""Assemble demo/preflight-demo.mp4 from narration (macOS say), cards and real UI frames.
+"""Assemble demo/preflight-demo.mp4 (v2): footage area 1920x960 above a fixed 120 px caption strip.
 
-Each scene lasts exactly as long as its narration (+ a short pause). UI scenes use the real
-recorded frames at their captured timing; "running" waits are compressed and the whole scene is
-uniformly re-timed to fit, never reordered or edited. Captions are the narration, burned in.
+Each scene lasts exactly as long as its narration (+ a short pause). UI scenes use the real 4K
+recorded frames at their captured timing and pan/zoom smoothly onto the focus region the recorder
+logged, so body text reads at about 28 px; "running" waits are compressed, key-moment holds keep
+their real length, nothing is reordered or edited. Captions are the narration, in the strip.
 
-Usage: python scripts/video/build.py     (reads demo/storyboard.json written by storyboard.py)
+Usage: python scripts/video/build.py [scene_id ...]   (reads demo/storyboard.json from storyboard.py;
+       with scene ids, only those scenes are re-rendered)
 """
 from __future__ import annotations
 
@@ -12,21 +14,24 @@ import json
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from cards import caption_png  # noqa: E402
+from PIL import Image, ImageDraw
 
-TEMPO_NOTE = "voice-over sped up 8% with ffmpeg atempo (pitch preserved)"
+sys.path.insert(0, str(Path(__file__).parent))
+from cards import font  # noqa: E402
 
 VOICE = "Karen (Premium)"
-FPS = 30
-PAD = 0.6  # seconds of silence after each scene's narration
 TEMPO = 1.08  # pitch-preserving speed-up of the voice-over (Premium voices ignore say -r)
+FPS = 30
+PAD = 0.6
+W, H, AREA_H, STRIP_H = 1920, 1080, 960, 120
+SRC_SCALE = 2.5  # recorder device scale: CSS px -> source px
+MIN_CROP_W, MAX_CROP_W = 1920, 2760  # never upscale; keep 16px body text >= ~28px in the final frame
+BG, STRIP = (11, 18, 32), (11, 18, 32)
 WORK = Path("demo/build")
 AUDIO = WORK / "audio"
-CAPS = WORK / "captions"
-SCENES_OUT = WORK / "scenes"
 
 
 def run(cmd: list[str]) -> None:
@@ -49,12 +54,9 @@ def narrate(sid: str, text: str) -> tuple[Path, float]:
 
 
 def caption_chunks(text: str) -> list[str]:
-    """Split narration into chunks that each fit the two-line caption bar (84 chars per line)."""
-    import textwrap
-
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    """Chunks that each fit two lines of the caption strip (84 chars per line); no words dropped."""
     chunks: list[str] = []
-    for s in sentences:
+    for s in re.split(r"(?<=[.!?])\s+", text.strip()):
         cur = ""
         for w in s.split():
             trial = f"{cur} {w}".strip()
@@ -68,93 +70,156 @@ def caption_chunks(text: str) -> list[str]:
     return chunks
 
 
-def captions(sid: str, text: str, speech: float, total: float) -> Path:
-    """Concat list of caption overlays timed proportionally to their length in the narration."""
+def caption_strip(text: str) -> Image.Image:
+    im = Image.new("RGB", (W, STRIP_H), STRIP)
+    d = ImageDraw.Draw(im)
+    f = font(34, True)
+    lines = textwrap.wrap(text, 84)[:2] if text else []
+    y = (STRIP_H - 46 * len(lines)) / 2 + 2
+    for ln in lines:
+        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(255, 255, 255))
+        y += 46
+    return im
+
+
+def caption_timeline(text: str, speech: float) -> list[tuple[float, Image.Image]]:
     chunks = caption_chunks(text)
-    weights = [len(c) for c in chunks]
-    lines, used = [], 0.0
-    for i, (c, w) in enumerate(zip(chunks, weights)):
-        png = CAPS / f"{sid}_{i:02d}.png"
-        caption_png(png, c)
-        dur = speech * w / sum(weights)
-        lines += [f"file '{png.resolve()}'", f"duration {dur:.3f}"]
-        used += dur
-    blank = CAPS / "blank.png"
-    if not blank.exists():
-        from PIL import Image
-
-        Image.new("RGBA", (1920, 1080), (0, 0, 0, 0)).save(blank)
-    lines += [f"file '{blank.resolve()}'", f"duration {max(0.05, total - used):.3f}", f"file '{blank.resolve()}'"]
-    path = CAPS / f"{sid}.txt"
-    path.write_text("\n".join(lines) + "\n")
-    return path
+    total = sum(len(c) for c in chunks)
+    out, t = [], 0.0
+    for c in chunks:
+        out.append((t, caption_strip(c)))
+        t += speech * len(c) / total
+    out.append((speech + 0.05, caption_strip("")))
+    return out
 
 
-def frames_list(sid: str, spec: dict, total: float) -> Path:
-    """Real UI frames for the given tags, re-timed to fill `total` seconds."""
+# --- visuals: each returns a function t -> 1920x960 RGB image ------------------------
+
+def image_visual(spec: dict, total: float):
+    im = Image.open(spec["path"]).convert("RGB")
+    if im.size != (W, AREA_H):
+        im = im.resize((W, int(im.height * W / im.width)), Image.LANCZOS).crop((0, 0, W, AREA_H))
+    return lambda t: im
+
+
+def pan_visual(spec: dict, total: float):
+    src = Image.open(spec["path"]).convert("RGB")
+    h = spec.get("height", 840)
+    src = src.resize((int(src.width * h / src.height), h), Image.LANCZOS)
+    canvas_bg = Image.new("RGB", (W, AREA_H), (255, 255, 255))
+    span = max(0, src.width - W)
+
+    def at(t: float) -> Image.Image:
+        u = min(1.0, max(0.0, (t - 1.0) / max(1.0, total - 3.0)))
+        u = u * u * (3 - 2 * u)  # ease in/out
+        x = int(span * u)
+        frame = canvas_bg.copy()
+        frame.paste(src.crop((x, 0, x + W, h)), (0, (AREA_H - h) // 2))
+        return frame
+
+    return at
+
+
+def crop_for(focus: list[float] | None, src_w: int, src_h: int) -> tuple[float, float, float, float]:
+    """Source-pixel crop (x, y, w, h) at 2:1 around the focus, clamped for legibility and bounds."""
+    if not focus:
+        fx, fy, fw, fh = 0, 0, src_w, src_h
+    else:
+        fx, fy, fw, fh = [v * SRC_SCALE for v in focus]
+    cx, cy = fx + fw / 2, fy + fh / 2
+    w = max(fw, fh * 2)
+    w = min(max(w, MIN_CROP_W), MAX_CROP_W, src_w)
+    h = w / 2
+    x = min(max(cx - w / 2, 0), src_w - w)
+    y = min(max(cy - h / 2, 0), src_h - h)
+    if focus and fy < y:  # if the focus is taller than the crop, keep its top in view
+        y = max(0, fy - 12 * SRC_SCALE)
+    return x, y, w, h
+
+
+def frames_visual(spec: dict, total: float):
     folder = Path(spec["dir"])
     timeline = json.loads((folder / "timeline.json").read_text())
     picked = [f for f in timeline if any(f["tag"].startswith(t) for t in spec["tags"])]
     if not picked:
-        raise SystemExit(f"{sid}: no frames for tags {spec['tags']} in {folder}")
+        raise SystemExit(f"no frames for {spec['tags']} in {folder}")
     durs = [max(0.033, b["t"] - a["t"]) for a, b in zip(picked, picked[1:])] + [0.4]
-    fast = spec.get("fast_tags", [])
-    slow_total = sum(d for f, d in zip(picked, durs) if any(f["tag"] == t for t in fast))
-    if slow_total > spec.get("fast_max", 2.0):  # compress agent "thinking" waits
-        k = spec.get("fast_max", 2.0) / slow_total
-        durs = [d * k if any(f["tag"] == t for t in fast) else d for f, d in zip(picked, durs)]
-    real = sum(durs)
-    k = min(total / real, 1.6) if real < total else total / real
-    durs = [d * k for d in durs]
+    fast, keep = spec.get("fast_tags", []), spec.get("keep_real", [])
+    fast_total = sum(d for f, d in zip(picked, durs) if f["tag"] in fast)
+    if fast_total > spec.get("fast_max", 2.0):  # compress agent "thinking" waits only
+        k = spec.get("fast_max", 2.0) / fast_total
+        durs = [d * k if f["tag"] in fast else d for f, d in zip(picked, durs)]
+    fixed = sum(d for f, d in zip(picked, durs) if f["tag"] in keep)
+    flex = sum(d for f, d in zip(picked, durs) if f["tag"] not in keep)
+    k = min(1.6, max(0.25, (total - fixed) / flex)) if flex else 1.0
+    durs = [d if f["tag"] in keep else d * k for f, d in zip(picked, durs)]
     durs[-1] += max(0.0, total - sum(durs))
-    lines = []
-    for f, d in zip(picked, durs):
-        lines += [f"file '{(folder / f['frame']).resolve()}'", f"duration {d:.4f}"]
-    lines.append(f"file '{(folder / picked[-1]['frame']).resolve()}'")
-    path = WORK / f"{sid}_frames.txt"
-    path.write_text("\n".join(lines) + "\n")
-    return path
+    starts = [sum(durs[:i]) for i in range(len(durs))]
+    cache: dict[str, Image.Image] = {}
+    state: dict = {"rect": None}
+
+    def source(i: int) -> Image.Image:
+        name = picked[i]["frame"]
+        if name not in cache:
+            cache.clear()
+            cache[name] = Image.open(folder / name).convert("RGB")
+        return cache[name]
+
+    def at(t: float) -> Image.Image:
+        i = max(0, min(len(picked) - 1, sum(1 for s in starts if s <= t) - 1))
+        src = source(i)
+        target = crop_for(picked[i].get("focus"), *src.size)
+        if state["rect"] is None:
+            state["rect"] = target
+        else:  # smooth pan/zoom toward the target
+            state["rect"] = tuple(r + (g - r) * 0.14 for r, g in zip(state["rect"], target))
+        x, y, w, h = state["rect"]
+        return src.crop((int(x), int(y), int(x + w), int(y + h))).resize((W, AREA_H), Image.LANCZOS)
+
+    return at
+
+
+VISUALS = {"image": image_visual, "pan": pan_visual, "frames": frames_visual}
 
 
 def render_scene(scene: dict) -> Path:
     sid, text, vis = scene["id"], scene["narration"], scene["visual"]
     wav, speech = narrate(sid, text)
     total = round(speech + PAD, 3)
-    caps = captions(sid, text, speech, total)
-    out = SCENES_OUT / f"{sid}.mp4"
-    if vis["type"] == "image":
-        video_in = ["-loop", "1", "-t", f"{total}", "-i", vis["path"]]
-        base = "[0:v]scale=1920:1080,setsar=1"
-    elif vis["type"] == "pan":
-        video_in = ["-loop", "1", "-t", f"{total}", "-i", vis["path"]]
-        h = vis.get("height", 860)
-        base = (f"[0:v]scale=-2:{h},crop=1920:{h}:'min(iw-1920,max(0,(iw-1920)*(t-1)/{max(1.0, total - 3):.2f}))':0,"
-                f"pad=1920:1080:0:{(1080 - h) // 2}:color=white,setsar=1")
-    elif vis["type"] == "frames":
-        video_in = ["-f", "concat", "-safe", "0", "-i", str(frames_list(sid, vis, total))]
-        base = "[0:v]scale=1920:1080,setsar=1"
-    else:
-        raise SystemExit(f"unknown visual type {vis['type']}")
-    graph = f"{base},fps={FPS},format=rgba[v0];[1:v]fps={FPS},format=rgba[c];[v0][c]overlay=0:0,format=yuv420p[v]"
-    run(["ffmpeg", "-y", "-loglevel", "error", *video_in, "-f", "concat", "-safe", "0", "-i", str(caps), "-i", str(wav),
-         "-filter_complex", graph, "-map", "[v]", "-map", "2:a", "-af", "apad", "-t", f"{total}",
-         "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-r", str(FPS), "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-         str(out)])
+    visual = VISUALS[vis["type"]](vis, total)
+    caps = caption_timeline(text, speech)
+    out = WORK / f"{sid}.mp4"
+    ff = subprocess.Popen(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
+         "-i", "-", "-i", str(wav), "-af", "apad", "-t", f"{total}", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", str(out)],
+        stdin=subprocess.PIPE)
+    frame = Image.new("RGB", (W, H), BG)
+    for n in range(int(round(total * FPS))):
+        t = n / FPS
+        frame.paste(visual(t), (0, 0))
+        frame.paste(next(img for start, img in reversed(caps) if start <= t), (0, AREA_H))
+        ff.stdin.write(frame.tobytes())
+    ff.stdin.close()
+    if ff.wait() != 0:
+        raise SystemExit(f"ffmpeg failed for {sid}")
     print(f"  {sid}: {total:5.1f}s  ({vis['type']})", flush=True)
     return out
 
 
 def main() -> None:
-    for d in (AUDIO, CAPS, SCENES_OUT):
-        d.mkdir(parents=True, exist_ok=True)
+    AUDIO.mkdir(parents=True, exist_ok=True)
     board = json.loads(Path("demo/storyboard.json").read_text())
-    parts = [render_scene(s) for s in board["scenes"]]
+    only = set(sys.argv[1:])
+    parts = []
+    for s in board["scenes"]:
+        out = WORK / f"{s['id']}.mp4"
+        parts.append(render_scene(s) if (not only or s["id"] in only or not out.exists()) else out)
     lst = WORK / "scenes.txt"
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
     final = Path("demo/preflight-demo.mp4")
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
-         "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-r", str(FPS), "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(final)])
+    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy",
+         "-movflags", "+faststart", str(final)])
     print(f"done: {final}  {duration(final):.1f}s")
 
 

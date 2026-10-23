@@ -1,6 +1,6 @@
 # Preflight demo video: narration script
 
-AI-generated: voice-over by macOS `say -v "Karen (Premium)"`; screen recording by Playwright driving the real Streamlit UI in live mode (real Zetaris, NVIDIA Nemotron called directly; Meterless Nightshift not used). Waits are sped up; no output is staged or edited. Built by `scripts/video/` (record_ui.py, make_cards.py, storyboard.py, build.py). Captions are the narration below, burned in.
+AI-generated: voice-over by macOS `say -v "Karen (Premium)"`; screen recording by Playwright driving the real Streamlit UI in live mode (real Zetaris, NVIDIA Nemotron called directly; Meterless Nightshift not used), captured at 4K and shown with pan-and-zoom onto the region being narrated; captions sit in a fixed strip below the footage. Waits are sped up; no output is staged or edited. Built by `scripts/video/` (record_ui.py, make_cards.py, storyboard.py, build.py). Captions are the narration below, burned in.
 
 ## Problem and track
 
@@ -26,7 +26,7 @@ AI-generated: voice-over by macOS `say -v "Karen (Premium)"`; screen recording b
 
 **08_run_b** (frames): Same request again. First, Preflight re-checks the offer it already sent. Priya is now on approved leave, so the offer is withdrawn, with the leave record as evidence. A naive agent that books its top pick would have sent her anyway.
 
-**09_run_b_verifier** (frames): The Planner's next picks are refused for real reasons. Tom lacks the cardiac skill, and Raj, Kai and Noor would not get ten hours' rest. Those reasons go back to the Planner, its re-plan is refused on the same rest rule, and Sam is at his hour cap. So Preflight asks the agency for exactly one nurse.
+**09_run_b_verifier** (frames): The Planner's next picks are refused for real reasons. Tom lacks the cardiac skill, Sam is at his hour cap, and Raj would not get ten hours' rest. Those three reasons go back to the Planner. Its re-plan, and the rest of the pool, are refused on the same rest rule. So Preflight asks the agency for exactly one nurse.
 
 ## Zetaris and Meterless
 
@@ -37,6 +37,8 @@ AI-generated: voice-over by macOS `say -v "Karen (Premium)"`; screen recording b
 **12_meterless** (frames): Meterless does real work too. H-MEM recalled that Priya had covered this shift, and lowered its confidence when the Verifier refused her. The World Model holds the facts pulled from Zetaris, fifty-five observations from five queries, each with its provenance.
 
 ## Output and impact
+
+**13a_impact_line** (frames): For a ward manager, that means a safe cover plan in under a minute, and every no comes with the record that proves it.
 
 **13_impact** (image): To measure reliability, we sent twelve hundred random requests across two hundred synthetic hospital worlds, and re-checked every action with an independent checker. Preflight made zero people-safety violations. A naive agent made them in twenty-three point two percent of requests.
 

@@ -12,16 +12,17 @@ from playwright.sync_api import sync_playwright
 
 OUT = Path("demo/frames/explorer")
 OUT.mkdir(parents=True, exist_ok=True)
-for old in OUT.glob("*.png"):
+for old in [*OUT.glob("*.png"), *OUT.glob("*.jpg")]:
     old.unlink()
+FOCUS = [255, 40, 900, 450]  # CSS px: source tree + the left of the opened source's metadata
 timeline: list[dict] = []
 t0 = time.time()
 
 
 def snap(page, tag="explorer"):
-    path = OUT / f"{len(timeline):05d}.png"
-    page.screenshot(path=str(path))
-    timeline.append({"frame": path.name, "t": round(time.time() - t0, 3), "tag": tag})
+    path = OUT / f"{len(timeline):05d}.jpg"
+    page.screenshot(path=str(path), type="jpeg", quality=88)
+    timeline.append({"frame": path.name, "t": round(time.time() - t0, 3), "tag": tag, "focus": FOCUS})
 
 
 def hold(page, seconds):
@@ -42,7 +43,7 @@ def expand(page, label: str):
 
 with sync_playwright() as p:
     b = p.chromium.launch()
-    ctx = b.new_context(storage_state="demo/.auth/zetaris.json", viewport={"width": 1536, "height": 864}, device_scale_factor=1.25)
+    ctx = b.new_context(storage_state="demo/.auth/zetaris.json", viewport={"width": 1536, "height": 864}, device_scale_factor=2.5)
     page = ctx.new_page()
     page.goto("http://localhost:3000/", wait_until="networkidle")
     page.wait_for_timeout(1500)

@@ -43,8 +43,10 @@ for e in b:
                      + ("PASS" if e["passed"] else "FAIL " + ", ".join(bad)))
     elif k == "replan":
         lines.append(f"{s:>3}  {r:<12} {k:<16} round 2 from {len(e['refusals'])} refusals -> " + ", ".join(who(c["params"]) for c in e["candidates"]))
-    elif k in ("action_withdrawn", "action_fired"):
-        lines.append(f"{s:>3}  {r:<12} {k:<16} {e['message'][:70]}")
+    elif k == "action_withdrawn":
+        lines.append(f"{s:>3}  {r:<12} {k:<16} offer {who(e['params'])} withdrawn: staff_not_on_leave")
+    elif k == "action_fired":
+        lines.append(f"{s:>3}  {r:<12} {k:<16} {e['message'].split(':')[0]} sent")
     elif k == "memory_feedback":
         lines.append(f"{s:>3}  {r:<12} {k:<16} not_helpful: recalled S001 refused by the Verifier")
 replan = next(e for e in b if e["kind"] == "replan")
